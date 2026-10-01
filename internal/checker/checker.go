@@ -2,6 +2,7 @@
 package checker
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -24,8 +25,17 @@ type Result struct {
 }
 
 // Check briefly binds 127.0.0.1:port and closes the listener before returning.
+// Retained as a background-context entrypoint for the checker regression tests.
 func Check(port int) Result {
 	return check(port, net.Listen)
+}
+
+// CheckContext uses the same bind classification with a context-aware listener.
+func CheckContext(ctx context.Context, port int) Result {
+	var config net.ListenConfig
+	return check(port, func(network, address string) (net.Listener, error) {
+		return config.Listen(ctx, network, address)
+	})
 }
 
 func check(port int, listen func(string, string) (net.Listener, error)) Result {
