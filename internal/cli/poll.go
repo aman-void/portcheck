@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aman-void/portcheck"
+	"github.com/aman-void/portcheck/internal/process"
 )
 
 // ticks and now allow deterministic loop tests without a public clock API.
@@ -15,6 +16,12 @@ import (
 func runPolling(ctx context.Context, opts options, stdout, stderr io.Writer,
 	check func(context.Context, string, int) portcheck.Result,
 	ticks <-chan time.Time, now func() time.Time) int {
+	return runPollingWithInspector(ctx, opts, stdout, stderr, check, ticks, now, process.Inspect)
+}
+
+func runPollingWithInspector(ctx context.Context, opts options, stdout, stderr io.Writer,
+	check func(context.Context, string, int) portcheck.Result,
+	ticks <-chan time.Time, now func() time.Time, inspect inspectFunc) int {
 	if opts.timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, opts.timeout)
@@ -26,12 +33,14 @@ func runPolling(ctx context.Context, opts options, stdout, stderr io.Writer,
 		ticks = ticker.C
 	}
 	previous := make(map[int]portcheck.Result)
+	previousProcesses := make(map[int]processDetail)
 	exit := 0
 	for {
 		if ctx.Err() != nil {
 			return pollingCanceled(ctx, opts, stderr, exit)
 		}
 		results := make([]portcheck.Result, 0, len(opts.ports))
+		details := make(map[int]processDetail)
 		allMatch, failed := true, false
 		for _, port := range opts.ports {
 			if ctx.Err() != nil {
@@ -53,6 +62,18 @@ func runPolling(ctx context.Context, opts options, stdout, stderr io.Writer,
 			if canceled {
 				return pollingCanceled(ctx, opts, stderr, exit)
 			}
+			if opts.watch && opts.process {
+				if result.Status == portcheck.StatusInUse {
+					details[port] = inspectDetail(ctx, opts.host, port, inspect)
+				}
+				if ctx.Err() != nil {
+					return pollingCanceled(ctx, opts, stderr, exit)
+				}
+				changed = changed || !sameProcesses(previousProcesses[port], details[port])
+				if changed {
+					warnProcess(stderr, opts.host, port, details[port])
+				}
+			}
 			results = append(results, result)
 			desired := portcheck.StatusFree
 			if opts.inUse {
@@ -62,11 +83,12 @@ func runPolling(ctx context.Context, opts options, stdout, stderr io.Writer,
 				allMatch = false
 			}
 			if opts.watch && changed {
-				if err := writeWatch(stdout, opts, result, now()); err != nil {
+				if err := writeWatchWithProcesses(stdout, opts, result, now(), details[port]); err != nil {
 					fmt.Fprintf(stderr, "error: write output: %v\n", err)
 					return 3
 				}
 				previous[port] = result
+				previousProcesses[port] = details[port]
 			}
 		}
 		// This is the completion boundary: cancellation observed before final
@@ -75,7 +97,21 @@ func runPolling(ctx context.Context, opts options, stdout, stderr io.Writer,
 			return pollingCanceled(ctx, opts, stderr, exit)
 		}
 		if !opts.watch && (failed || allMatch) {
-			if err := render(stdout, results, opts); err != nil {
+			if opts.process {
+				for _, result := range results {
+					if ctx.Err() != nil {
+						return pollingCanceled(ctx, opts, stderr, exit)
+					}
+					if result.Status == portcheck.StatusInUse {
+						details[result.Port] = inspectDetail(ctx, opts.host, result.Port, inspect)
+						warnProcess(stderr, opts.host, result.Port, details[result.Port])
+					}
+				}
+				if ctx.Err() != nil {
+					return pollingCanceled(ctx, opts, stderr, exit)
+				}
+			}
+			if err := renderWithProcesses(stdout, results, opts, details); err != nil {
 				fmt.Fprintf(stderr, "error: write output: %v\n", err)
 				return 3
 			}
@@ -141,6 +177,10 @@ func errorText(err error) string {
 }
 
 func writeWatch(w io.Writer, opts options, result portcheck.Result, timestamp time.Time) error {
+	return writeWatchWithProcesses(w, opts, result, timestamp, processDetail{})
+}
+
+func writeWatchWithProcesses(w io.Writer, opts options, result portcheck.Result, timestamp time.Time, detail processDetail) error {
 	if opts.quiet {
 		return writeResults(w, []portcheck.Result{result}, true)
 	}
@@ -152,5 +192,8 @@ func writeWatch(w io.Writer, opts options, result portcheck.Result, timestamp ti
 		status = "IN USE"
 	}
 	_, err := fmt.Fprintf(w, "%s  %s  %d %s\n", timestamp.Format("2006-01-02 15:04:05"), opts.host, result.Port, status)
-	return err
+	if err != nil {
+		return err
+	}
+	return writeProcess(w, detail)
 }

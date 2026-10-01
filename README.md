@@ -3,8 +3,9 @@
 A tiny Go CLI that answers one question: **can I bind this local TCP port?**
 
 Check ports and ranges, find an available port, watch state changes, or wait
-for a desired state. Consume results through JSON and a small Go API.
-**v0.3.0** uses only Go's standard library, defaults to IPv4 loopback
+for a desired state. Optionally identify visible Linux listening processes.
+Consume results through JSON and a small Go API.
+**v0.4.0** uses only Go's standard library, defaults to IPv4 loopback
 (`127.0.0.1`), and supports explicit local IPv4/IPv6 addresses and hostnames.
 
 ```text
@@ -27,7 +28,7 @@ make build
 ./bin/portcheck --version
 ```
 
-The version command prints `portcheck version 0.3.0`. Port statuses depend
+The version command prints `portcheck version 0.4.0`. Port statuses depend
 on what is running on your machine; the example output is illustrative.
 
 **Without Make:**
@@ -92,6 +93,7 @@ IN_USE
 | `--json` | Print an ordered JSON array; cannot combine with quiet mode |
 | `--find` | Find the first free port, starting at one supplied port |
 | `--host <host>` | Select the local bind address (default `127.0.0.1`) |
+| `--process` | Identify visible local listening processes (Linux only) |
 | `--watch` | Emit initial states and subsequent changes until interrupted |
 | `--wait` | Wait until all requested ports are free |
 | `--wait-in-use` | Wait until all requested ports are occupied |
@@ -269,6 +271,89 @@ readiness or application health.
 `--interval` requires watch or either wait mode. `--timeout` requires a wait
 mode. `--quiet --json` remains invalid. These conflicts fail before networking.
 
+### Inspect listening processes
+
+```sh
+./bin/portcheck --process 8080
+./bin/portcheck --process 3000 8080-8083
+./bin/portcheck --process --json 8080
+./bin/portcheck --process --watch 8080
+./bin/portcheck --process --wait-in-use --timeout 30s 8080
+```
+
+Process inspection is optional and read-only. Only occupied ports are inspected;
+free ports and bind errors have no process details. Without `--process`, no
+process files are read and existing output is unchanged. Multiple visible owners
+are supported, deduplicated by PID, and displayed in ascending PID order under
+their port, while port order and first-occurrence deduplication remain unchanged:
+
+```text
+PORT    STATUS
+8080    IN USE
+        PID: 18242  NAME: api  EXECUTABLE: /usr/local/bin/api
+```
+
+Process-aware JSON is still an array. Occupied rows may add `processes`, with an
+integer `pid` and optional string `name` and `executable`. Absent metadata is
+omitted; the PID alone can identify a visible owner. A lookup failure adds the
+string `process_error` instead of changing the bind `status` or its `error` field:
+
+```json
+[
+  {"port": 8080, "status": "in_use", "processes": [{"pid": 18242, "name": "api", "executable": "/usr/local/bin/api"}]},
+  {"port": 8081, "status": "in_use", "process_error": "process inspection permission denied"},
+  {"port": 8082, "status": "free"}
+]
+```
+
+Process failures also appear as `warning:` diagnostics on stderr and as
+`PROCESS unavailable:` in human output. **They do not alter exit codes**: an
+occupied one-shot check still exits `1`, satisfied wait-in-use exits `0`, and
+watch interruption exits `0` unless a bind or output error occurred. Quiet mode
+still prints only status tokens, though lookup warnings remain on stderr.
+
+Process-aware watch inspects each occupied observation and emits changes in
+owner PID sets, names, executable paths, or lookup errors, even if the port stays
+occupied. Identical observations and repeated warnings are suppressed. Quiet
+watch can therefore repeat `IN_USE` for an ownership change. No caching is used.
+Wait inspects only occupied rows of the final completed cycle; ownership is not
+a wait condition. `--find --process` performs no process lookups and preserves
+find's numeric/JSON output. `--watch --json` remains invalid.
+
+#### Platform support and limitations
+
+- **Linux:** runtime-tested without root. Reads listening socket tables from
+  `/proc/net/tcp` and `/proc/net/tcp6`, maps socket inodes through visible
+  `/proc/<pid>/fd` entries, and reads only owner metadata (`stat`, `comm`, `exe`).
+  It does not run `ss`, `lsof`, or any other command. Process names and paths are
+  sanitized for terminal output; JSON preserves the original escaped strings.
+- **macOS, Windows, other platforms:** process inspection is explicitly
+  unsupported in v0.4. An occupied `--process` result reports that limitation,
+  while normal checks and free-port checks still work. Cross-compilation does
+  not establish native runtime support.
+- Permissions, `hidepid`, containers, and PID/network namespaces can hide owners.
+  Only discovered visible owners are returned; this is not a completeness
+  guarantee. If none can be identified, the port remains `IN USE` with a lookup
+  warning. No privilege escalation, process control, or indefinite retry occurs.
+- Inspection follows the requested local address within its address family,
+  including same-family wildcard conflicts. `/proc` lacks the IPv6 socket's
+  `IPV6_V6ONLY` setting, so cross-family wildcard conflicts are not attributed;
+  e.g. an IPv4 bind blocked solely by a dual-stack IPv6 listener can report
+  process unavailable. Go's generic TCP wildcard listener may use an IPv6
+  dual-stack socket even when configured with `0.0.0.0`; use `--host ::` to inspect
+  those IPv6 listeners. Scoped IPv6 inspection is explicitly unavailable because
+  these tables lack interface scope. Bind checks themselves remain supported.
+- Hostnames are independently resolved using Go's IPv4 preference; DNS can change
+  between binding and inspection. Use literal addresses when family matters.
+  Socket/PID identity is rechecked, but all results remain live, non-atomic
+  observations. A bind conflict need not be a listening socket (e.g. an active
+  connection or bound-but-not-listening socket), so ownership may be unavailable.
+- Scanning `/proc` costs more than binding; large occupied ranges and watch cycles
+  may take longer than the requested interval. Inspection remains sequential.
+
+The public Go API and `portcheck.Result` are unchanged. Process inspection and
+the combined CLI records are internal in v0.4; no new public process API is exposed.
+
 ### Try it against a real listener
 
 In **terminal 1**, start a local HTTP server (Python 3 required):
@@ -364,8 +449,8 @@ range such as `1-65535` may therefore include permission errors and exit `3`
 under a normal user. That is not evidence that those ports are occupied;
 Portcheck does not request elevated privileges.
 
-This version is TCP-only. It does not inspect every interface, identify
-processes, check UDP, test remote connectivity, or scan networks.
+This version is TCP-only. It does not inspect every interface, check UDP,
+test remote connectivity, control processes, or scan networks.
 The checker uses portable Go networking APIs. Linux is runtime-tested;
 Linux, macOS, and Windows compile for amd64 and arm64. Successful compilation
 alone is not a claim of functional support on an untested OS.
@@ -374,7 +459,7 @@ alone is not a claim of functional support on an untested OS.
 
 The public package lives at the module root:
 `github.com/aman-void/portcheck`. Once the version is published, add it to
-your Go project with `go get github.com/aman-void/portcheck@v0.3.0`.
+your Go project with `go get github.com/aman-void/portcheck@v0.4.0`.
 For unpublished local changes, use a local `replace` directive pointing to
 this checkout instead of expecting the remote version to exist.
 
@@ -499,6 +584,8 @@ go test . -run '^TestCheckRealListener$' -count=1
 go test ./internal/cli -run '^TestRangeAndFindRealListeners$' -count=1
 go test . -run '^TestCheckHostRealListeners$' -count=1
 go test ./internal/cli -run '^TestWaitReal' -count=1
+go test ./internal/process -count=1
+go test ./internal/cli -run '^TestProcess' -count=1
 ```
 
 Tests allocate local TCP listeners dynamically; they need loopback socket
@@ -515,7 +602,9 @@ go test ./internal/cli -run '^$' -bench '^BenchmarkRangeExpansion$' -benchmem
 `cmd/portcheck` handles signals and process exit; `internal/cli` owns parsing,
 find, watch/wait orchestration, output, and exit-code selection. The CLI calls the public root package,
 which owns library validation and batch semantics; `internal/checker` owns
-binding and error classification. The library never imports the CLI.
+binding and error classification. `internal/process` independently provides
+optional platform-specific ownership inspection, composed by the CLI.
+The library never imports the CLI or process inspector.
 The checker remains stateless. Tests use internal function parameters to control failures and timing,
 without mutable global hooks. Plans live under `plans/` and describe future
 scope, not currently available features. Each version requires human review

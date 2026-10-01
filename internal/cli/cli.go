@@ -9,9 +9,10 @@ import (
 	"time"
 
 	"github.com/aman-void/portcheck"
+	"github.com/aman-void/portcheck/internal/process"
 )
 
-const version = "0.3.0"
+const version = "0.4.0"
 
 const help = `portcheck - Check local TCP port availability
 
@@ -26,6 +27,7 @@ Options:
       --json       Output an ordered JSON array (conflicts with --quiet)
       --find       Print the first free port at or above the starting port
       --host HOST  Local IP address or DNS hostname (default 127.0.0.1)
+      --process    Inspect visible local listening processes (Linux)
       --watch      Emit initial state and changes until interrupted
       --wait       Wait until all ports are free
       --wait-in-use Wait until all ports are in use
@@ -42,6 +44,8 @@ Watch, wait, wait-in-use, and find are mutually exclusive. --watch --json is inv
 --interval requires watch/wait; --timeout requires wait. Durations use Go syntax.
 Wait emits only final results. Watch quiet mode emits only changed status tokens.
 Interrupt: watch exits 0 (3 if checks failed); wait exits 1. Wait timeout exits 1.
+Process lookup warnings do not change port status or exit codes. Quiet stays status-only.
+Process watch emits ownership changes; wait inspects final results; find skips inspection.
 
 Exit codes:
   0  All ports free, a free port found, wait satisfied, clean watch stop, or help/version
@@ -59,6 +63,7 @@ Examples:
   portcheck --host ::1 8080
   portcheck --watch --interval 2s 8080
   portcheck --wait --timeout 30s 8080
+  portcheck --process --json 8080
 `
 
 type options struct {
@@ -74,6 +79,7 @@ type options struct {
 	inUse    bool
 	interval time.Duration
 	timeout  time.Duration
+	process  bool
 }
 
 // Run writes results and diagnostics to the supplied streams and returns an exit code.
@@ -90,6 +96,10 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) in
 }
 
 func runContext(ctx context.Context, args []string, stdout, stderr io.Writer, check func(context.Context, string, int) portcheck.Result) int {
+	return runContextWithInspector(ctx, args, stdout, stderr, check, process.Inspect)
+}
+
+func runContextWithInspector(ctx context.Context, args []string, stdout, stderr io.Writer, check func(context.Context, string, int) portcheck.Result, inspect inspectFunc) int {
 	opts, err := parse(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
@@ -110,7 +120,7 @@ func runContext(ctx context.Context, args []string, stdout, stderr io.Writer, ch
 		return 0
 	}
 	if opts.watch || opts.wait || opts.inUse {
-		return runPolling(ctx, opts, stdout, stderr, check, nil, time.Now)
+		return runPollingWithInspector(ctx, opts, stdout, stderr, check, nil, time.Now, inspect)
 	}
 	checkPort := func(port int) portcheck.Result {
 		if err := ctx.Err(); err != nil {
@@ -122,6 +132,7 @@ func runContext(ctx context.Context, args []string, stdout, stderr io.Writer, ch
 		return runFind(opts, stdout, stderr, checkPort)
 	}
 	results := make([]portcheck.Result, 0, len(opts.ports))
+	details := make(map[int]processDetail)
 	exit := 0
 	for _, port := range opts.ports {
 		if ctx.Err() != nil {
@@ -132,6 +143,10 @@ func runContext(ctx context.Context, args []string, stdout, stderr io.Writer, ch
 			return 1
 		}
 		result := checkPort(port)
+		if opts.process && result.Status == portcheck.StatusInUse {
+			details[port] = inspectDetail(ctx, opts.host, port, inspect)
+			warnProcess(stderr, opts.host, port, details[port])
+		}
 		results = append(results, result)
 		switch result.Status {
 		case portcheck.StatusInUse:
@@ -143,7 +158,7 @@ func runContext(ctx context.Context, args []string, stdout, stderr io.Writer, ch
 			exit = 3
 		}
 	}
-	if err := render(stdout, results, opts); err != nil {
+	if err := renderWithProcesses(stdout, results, opts, details); err != nil {
 		fmt.Fprintf(stderr, "error: write output: %v\n", err)
 		return 3
 	}
@@ -176,6 +191,9 @@ func parse(args []string) (options, error) {
 				continue
 			case "--find":
 				opts.find = true
+				continue
+			case "--process":
+				opts.process = true
 				continue
 			case "--watch":
 				opts.watch = true
