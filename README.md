@@ -2,8 +2,8 @@
 
 A tiny Go CLI that answers one question: **can I bind this local TCP port?**
 
-Check one port or several, get readable output, and use predictable exit
-codes in your scripts. **v0.1.0** uses only Go's standard library and checks
+Check ports and ranges, find an available port, or consume results through
+JSON and a small Go API. **v0.2.0** uses only Go's standard library and checks
 IPv4 loopback (`127.0.0.1`).
 
 ```text
@@ -26,7 +26,7 @@ make build
 ./bin/portcheck --version
 ```
 
-The version command prints `portcheck version 0.1.0`. Port statuses depend
+The version command prints `portcheck version 0.2.0`. Port statuses depend
 on what is running on your machine; the example output is illustrative.
 
 **Without Make:**
@@ -88,7 +88,80 @@ IN_USE
 | `-h`, `--help` | Show usage and exit successfully |
 | `-v`, `--version` | Show version and exit successfully |
 | `-q`, `--quiet` | Print only status tokens |
+| `--json` | Print an ordered JSON array; cannot combine with quiet mode |
+| `--find` | Find the first free port, starting at one supplied port |
 | `--` | End option parsing |
+
+### Check port ranges
+
+```sh
+# Include every port from 3000 through 3010.
+./bin/portcheck 3000-3010
+
+# Mix individual ports and ranges.
+./bin/portcheck 3000 8080-8083 5432
+
+# Overlapping ranges still check each port only once.
+./bin/portcheck 3000-3003 3002-3005
+```
+
+Both range endpoints are inclusive. Expanded ports retain their first
+occurrence in the input; Portcheck does not sort them. `3000-3000` is valid.
+Reversed or malformed ranges such as `3010-3000` and `3000-` are rejected
+before any checks run. The maximum unique set is `1-65535`, checked
+sequentially without spawning a worker pool.
+
+### Find an available port
+
+```sh
+./bin/portcheck --find 3000
+```
+
+If 3000 and 3001 are occupied but 3002 is available, stdout contains:
+
+```text
+3002
+```
+
+Search starts at the supplied port and stops at the first free port or 65535.
+It never wraps to port 1. Exactly one single starting port is required;
+`--find 3000 4000` and `--find 3000-3010` are invalid, even for a one-port range.
+`--find --quiet 3000` also prints the selected **port number**, not `FREE`.
+System errors stop the search rather than being treated as occupied ports.
+
+When no free port remains, stdout is empty, stderr explains the exhausted
+search, and the exit code is `1`. A found port is not reserved.
+
+### Get JSON output
+
+```sh
+./bin/portcheck --json 3000 8080-8082
+./bin/portcheck --find --json 3000
+```
+
+JSON always uses an array, including one-port checks and successful find
+results. Example (formatted here for readability):
+
+```json
+[
+  {"port": 3000, "status": "free"},
+  {"port": 8080, "status": "in_use"}
+]
+```
+
+The schema is `port` (integer), `status` (`free`, `in_use`, or `error`), and an
+optional `error` string for failed checks. Successful rows omit `error`.
+For example:
+
+```json
+[{"port": 8080, "status": "error", "error": "check 127.0.0.1:8080: permission denied"}]
+```
+
+JSON comes from the same checks as human output and preserves the same
+deduplicated order. Diagnostics stay on stderr; stdout contains only JSON.
+JSON mode preserves exit codes—an occupied port still produces exit `1`.
+`--json --quiet` is rejected with exit `2`. An exhausted find emits no JSON;
+a system failure during JSON find emits the failed result and exits `3`.
 
 ### Try it against a real listener
 
@@ -131,9 +204,10 @@ error: invalid port "70000": must be between 1 and 65535
 2
 ```
 
-Ports must contain only decimal digits and be between **1 and 65535**.
-Leading zeroes are allowed; whitespace, signs, partial numbers, and ranges
-are rejected. All arguments are validated before any network operation.
+Individual ports and range endpoints must contain only decimal digits and
+be between **1 and 65535**. Leading zeroes are allowed; whitespace, signs,
+and partial numbers are rejected. All arguments are validated before any
+network operation.
 
 ### Use it in a shell script
 
@@ -158,8 +232,8 @@ before your application starts.
 
 | Code | Meaning |
 | --- | --- |
-| 0 | All requested ports are free; also help/version success |
-| 1 | One or more ports are in use |
+| 0 | All requested ports are free, a free port is found, or help/version succeeds |
+| 1 | One or more ports are in use, or find has no free port remaining |
 | 2 | Invalid CLI input, including missing ports |
 | 3 | System error, including failed output writes |
 
@@ -178,12 +252,77 @@ the listener. Only an address-in-use error becomes `IN USE`; permission and
 other failures remain errors. A `FREE` result is an observation, not a port
 reservation: another process can acquire the port immediately afterward.
 
+Some operating systems restrict low ports (commonly below 1024). A large
+range such as `1-65535` may therefore include permission errors and exit `3`
+under a normal user. That is not evidence that those ports are occupied;
+Portcheck does not request elevated privileges.
+
 This version is TCP-only and IPv4-loopback-only. It does not inspect every
 interface, identify processes, check UDP, test remote connectivity, or scan
-networks. Ranges, JSON, and a public Go API are not part of v0.1.
+networks. Host selection, watch/wait, and process inspection are not part of v0.2.
 The checker uses portable Go networking APIs. Linux is runtime-tested;
 Linux, macOS, and Windows compile for amd64 and arm64. Successful compilation
 alone is not a claim of functional support on an untested OS.
+
+## Go library
+
+The public package lives at the module root:
+`github.com/aman-void/portcheck`. Once the version is published, add it to
+your Go project with `go get github.com/aman-void/portcheck@v0.2.0`.
+For unpublished local changes, use a local `replace` directive pointing to
+this checkout instead of expecting the remote version to exist.
+
+```go
+package main
+
+import (
+    "context"
+    "errors"
+    "fmt"
+    "log"
+
+    "github.com/aman-void/portcheck"
+)
+
+func main() {
+    ctx := context.Background()
+    result, err := portcheck.Check(ctx, 8080)
+    if err != nil {
+        if errors.Is(err, portcheck.ErrInvalidPort) {
+            log.Fatal("port must be between 1 and 65535")
+        }
+        log.Fatal(err)
+    }
+    fmt.Printf("%d: %s\n", result.Port, result.Status)
+
+    results, err := portcheck.CheckPorts(ctx, []int{3000, 8080, 3000})
+    for _, result := range results {
+        fmt.Printf("%d: %s\n", result.Port, result.Status)
+        if result.Err != nil {
+            log.Printf("check failed: %v", result.Err)
+        }
+    }
+    if err != nil {
+        log.Printf("one or more checks failed: %v", err)
+    }
+}
+```
+
+- `Check(ctx, port) (Result, error)` returns `StatusFree`, `StatusInUse`, or
+  `StatusError`. An occupied port is a normal result, **not** a library error.
+- On failure, `Check` returns the same error in `Result.Err` and its error
+  return value. Use `errors.Is(err, portcheck.ErrInvalidPort)` for validation
+  failures; wrapped system errors retain their causes.
+- `CheckPorts(ctx, ports) ([]Result, error)` validates all ports before binding,
+  preserves order, and removes duplicates without modifying the input slice.
+  Empty input with an active context returns an empty slice and no error.
+- System failures appear in each affected `Result.Err` and are joined in the
+  batch error; checks for other ports continue. Cancellation stops the batch
+  with partial results and an error matching the context error.
+- Supply a non-nil context. Cancellation/deadlines are checked between
+  operations and passed to the listener; they do not reserve ports or promise
+  to interrupt every operating-system socket call instantaneously.
+- There is no public range parser or find API in v0.2; those are CLI concerns.
 
 ## Development
 
@@ -232,16 +371,26 @@ Focused tests:
 ```sh
 go test ./internal/checker -run '^TestCheckListenerLifecycle$' -count=1
 go test ./internal/cli -run '^TestRunRealListener$' -count=1
+go test . -run '^TestCheckRealListener$' -count=1
+go test ./internal/cli -run '^TestRangeAndFindRealListeners$' -count=1
 ```
 
 Tests allocate local TCP listeners dynamically; they need loopback socket
 access but no internet services or root privileges.
 
+Range-expansion benchmarks (including the full legal range):
+
+```sh
+go test ./internal/cli -run '^$' -bench '^BenchmarkRangeExpansion$' -benchmem
+```
+
 ### Architecture
 
-`cmd/portcheck` handles process exit; `internal/cli` owns parsing, output,
-and exit-code selection; `internal/checker` owns binding and error
-classification. Tests use internal function parameters to control failures,
+`cmd/portcheck` handles process exit; `internal/cli` owns parsing, find,
+output, and exit-code selection. The CLI calls the public root package,
+which owns library validation and batch semantics; `internal/checker` owns
+binding and error classification. The library never imports the CLI.
+Tests use internal function parameters to control failures,
 without mutable global hooks. Plans live under `plans/` and describe future
 scope, not currently available features. Each version requires human review
 before the next begins.

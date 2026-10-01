@@ -13,6 +13,8 @@
 - Availability means successfully binding the selected local TCP address, not connecting to it. Default to `127.0.0.1`; close successful listeners immediately. Only address-in-use failures mean `IN USE`.
 - Keep detection and structured results independent of CLI parsing and rendering. Watch/wait orchestration stays outside the stateless checker; doctor composes existing operations.
 - Preserve input order and deduplicate by first occurrence. Range endpoints are inclusive; find searches upward through 65535 without wrapping.
+- The CLI calls the root Go API, not `internal/checker` directly. `CheckPorts` validates all input before binding, continues after system errors, and returns partial results on cancellation; inspect both results and the joined error.
+- `--find` requires one single starting port and prints a port number even with `--quiet`. JSON is always an array; exhausted find emits no stdout and exits 1. `--quiet --json` is invalid.
 - v0.1 forbids concurrency. Later versions do not justify worker pools merely by adding ranges or polling.
 - From v0.3, use IPv6-safe address construction and cancellation-aware polling. Watch emits initial state and meaningful changes; wait requires every requested port to satisfy the condition.
 - From v0.4, process inspection is optional, read-only, and isolated in platform-specific files. Multiple owners are possible; lookup failures must not change port status.
