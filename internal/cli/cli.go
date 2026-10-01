@@ -2,33 +2,38 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 
-	"github.com/aman-void/portcheck/internal/checker"
+	"github.com/aman-void/portcheck"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 const help = `portcheck - Check local TCP port availability
 
 Usage:
   portcheck [options] <port>...
+  portcheck [options] --find <starting-port>
 
 Options:
   -h, --help       Show help
   -v, --version    Show version
   -q, --quiet      Output only the status
+      --json       Output an ordered JSON array (conflicts with --quiet)
+      --find       Print the first free port at or above the starting port
   --              End option parsing
 
 Checks TCP binding availability on 127.0.0.1. Ports must be 1-65535.
 Options may appear before or after ports. Duplicate ports are checked once.
+Ranges such as 3000-3010 include both endpoints. --find takes one single port.
+--find prints a port number, also in quiet mode; JSON contains one free result.
 
 Exit codes:
-  0  All ports free (or help/version)
-  1  One or more ports in use
+  0  All ports free, a free port found, or help/version
+  1  One or more ports in use, or no free port found
   2  Invalid input
   3  System error
 
@@ -36,6 +41,9 @@ Examples:
   portcheck 3000
   portcheck 3000 8080 5432
   portcheck -q 8080
+  portcheck 3000 8080-8083
+  portcheck --find 3000
+  portcheck --json 3000 8080
 `
 
 type options struct {
@@ -43,14 +51,19 @@ type options struct {
 	quiet   bool
 	help    bool
 	version bool
+	json    bool
+	find    bool
 }
 
 // Run writes results and diagnostics to the supplied streams and returns an exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
-	return run(args, stdout, stderr, checker.Check)
+	return run(args, stdout, stderr, func(port int) portcheck.Result {
+		result, _ := portcheck.Check(context.Background(), port)
+		return result
+	})
 }
 
-func run(args []string, stdout, stderr io.Writer, check func(int) checker.Result) int {
+func run(args []string, stdout, stderr io.Writer, check func(int) portcheck.Result) int {
 	opts, err := parse(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
@@ -70,22 +83,25 @@ func run(args []string, stdout, stderr io.Writer, check func(int) checker.Result
 		}
 		return 0
 	}
-	results := make([]checker.Result, 0, len(opts.ports))
+	if opts.find {
+		return runFind(opts, stdout, stderr, check)
+	}
+	results := make([]portcheck.Result, 0, len(opts.ports))
 	exit := 0
 	for _, port := range opts.ports {
 		result := check(port)
 		results = append(results, result)
 		switch result.Status {
-		case checker.StatusInUse:
+		case portcheck.StatusInUse:
 			if exit == 0 {
 				exit = 1
 			}
-		case checker.StatusError:
+		case portcheck.StatusError:
 			fmt.Fprintf(stderr, "error: failed to check port %d: %v\n", port, result.Err)
 			exit = 3
 		}
 	}
-	if err := writeResults(stdout, results, opts.quiet); err != nil {
+	if err := render(stdout, results, opts); err != nil {
 		fmt.Fprintf(stderr, "error: write output: %v\n", err)
 		return 3
 	}
@@ -111,6 +127,12 @@ func parse(args []string) (options, error) {
 			case "-q", "--quiet":
 				opts.quiet = true
 				continue
+			case "--json":
+				opts.json = true
+				continue
+			case "--find":
+				opts.find = true
+				continue
 			}
 			if strings.HasPrefix(arg, "-") {
 				return opts, fmt.Errorf("unknown option %q", arg)
@@ -122,22 +144,27 @@ func parse(args []string) (options, error) {
 	if opts.help || opts.version {
 		return opts, nil
 	}
+	if opts.quiet && opts.json {
+		return opts, fmt.Errorf("--quiet and --json cannot be used together")
+	}
+	if opts.find {
+		if len(tokens) != 1 {
+			return opts, fmt.Errorf("--find requires exactly one starting port")
+		}
+		if strings.Contains(tokens[0], "-") {
+			return opts, fmt.Errorf("--find requires a single starting port, not a range")
+		}
+		port, err := parsePort(tokens[0])
+		if err != nil {
+			return opts, err
+		}
+		opts.ports = []int{port}
+		return opts, nil
+	}
 	if len(tokens) == 0 {
 		return opts, fmt.Errorf("at least one port is required; use --help for usage")
 	}
-	seen := make(map[int]bool)
-	for _, token := range tokens {
-		if token == "" || strings.IndexFunc(token, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
-			return opts, fmt.Errorf("invalid port %q: must be a decimal integer", token)
-		}
-		port, err := strconv.Atoi(token)
-		if err != nil || port < 1 || port > 65535 {
-			return opts, fmt.Errorf("invalid port %q: must be between 1 and 65535", token)
-		}
-		if !seen[port] {
-			seen[port] = true
-			opts.ports = append(opts.ports, port)
-		}
-	}
-	return opts, nil
+	ports, err := expandPorts(tokens)
+	opts.ports = ports
+	return opts, err
 }
