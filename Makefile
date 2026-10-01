@@ -31,7 +31,7 @@ help:
 
 fmt:
 	$(call announce,Formatting Go source)
-	@gofmt -w cmd internal
+	@gofmt -w .
 	$(call success,Formatting complete)
 
 test:
