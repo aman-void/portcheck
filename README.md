@@ -2,9 +2,10 @@
 
 A tiny Go CLI that answers one question: **can I bind this local TCP port?**
 
-Check ports and ranges, find an available port, or consume results through
-JSON and a small Go API. **v0.2.0** uses only Go's standard library and checks
-IPv4 loopback (`127.0.0.1`).
+Check ports and ranges, find an available port, watch state changes, or wait
+for a desired state. Consume results through JSON and a small Go API.
+**v0.3.0** uses only Go's standard library, defaults to IPv4 loopback
+(`127.0.0.1`), and supports explicit local IPv4/IPv6 addresses and hostnames.
 
 ```text
 PORT    STATUS
@@ -26,7 +27,7 @@ make build
 ./bin/portcheck --version
 ```
 
-The version command prints `portcheck version 0.2.0`. Port statuses depend
+The version command prints `portcheck version 0.3.0`. Port statuses depend
 on what is running on your machine; the example output is illustrative.
 
 **Without Make:**
@@ -90,6 +91,12 @@ IN_USE
 | `-q`, `--quiet` | Print only status tokens |
 | `--json` | Print an ordered JSON array; cannot combine with quiet mode |
 | `--find` | Find the first free port, starting at one supplied port |
+| `--host <host>` | Select the local bind address (default `127.0.0.1`) |
+| `--watch` | Emit initial states and subsequent changes until interrupted |
+| `--wait` | Wait until all requested ports are free |
+| `--wait-in-use` | Wait until all requested ports are occupied |
+| `--interval <duration>` | Watch/wait polling interval (default `1s`, minimum `100ms`) |
+| `--timeout <duration>` | Positive wait timeout (default: no timeout) |
 | `--` | End option parsing |
 
 ### Check port ranges
@@ -163,6 +170,105 @@ JSON mode preserves exit codes—an occupied port still produces exit `1`.
 `--json --quiet` is rejected with exit `2`. An exhausted find emits no JSON;
 a system failure during JSON find emits the failed result and exits `3`.
 
+### Select a local host/address
+
+```sh
+./bin/portcheck --host 127.0.0.1 8080
+./bin/portcheck --host 0.0.0.0 8080
+./bin/portcheck --host ::1 8080
+./bin/portcheck --host localhost --find 3000
+```
+
+`--host` applies to every check, including find, watch, and wait. Supply an
+unbracketed IPv4/IPv6 address (IPv6 zones such as `fe80::1%eth0` are accepted)
+or an ASCII DNS hostname. Empty values, embedded ports, malformed IPs, and
+invalid hostname syntax are rejected with exit `2`, without binding or DNS
+lookups. Internationalized names must use their ASCII/punycode form.
+
+For a hostname, Go resolves it during binding and selects **one** address;
+Portcheck does not check all resolved addresses or silently fall back to
+loopback. `localhost` is not guaranteed to select IPv4; use a literal IP when
+the address family matters. Resolution failures, unavailable local addresses,
+and unsupported IPv6 are system errors (exit `3`), not occupied ports.
+
+This is still a local **bind**, not a connection test. A remote-only address
+normally cannot be bound. Wildcards (`0.0.0.0` and `::`) select wildcard bind
+semantics; IPv6 dual-stack behavior and conflicts depend on the OS. A free
+`127.0.0.1` port does not prove that the same wildcard or IPv6 port is free.
+One-shot human output and JSON retain their existing schemas; the selected
+host is supplied by the invocation, not an added JSON field.
+
+### Watch state changes
+
+```sh
+./bin/portcheck --watch 8080
+./bin/portcheck --host ::1 --watch --interval 2s 3000-3003
+```
+
+Watch immediately emits each unique port's initial state, then only changes:
+
+```text
+2026-10-01 15:04:05  127.0.0.1  8080 IN USE
+2026-10-01 15:04:07  127.0.0.1  8080 FREE
+```
+
+Human events contain a local-time timestamp (`YYYY-MM-DD HH:MM:SS`), requested
+host, port, and status. Each port keeps its own previous state, in input order.
+An error's appearance, changed diagnostic, or recovery is also a state change.
+Watch continues after check errors; unchanged errors do not spam stderr.
+Diagnostics stay on stderr and events on stdout. Output-write failures stop
+immediately with exit `3`.
+
+`--quiet` emits only the existing `FREE`, `IN_USE`, or `ERROR` tokens for initial
+states and changes (without host, port, or timestamp). For multiple ports this
+token stream does not identify the port; use normal output when identity matters.
+**`--watch --json` is rejected with exit `2`**: JSON remains a final array, not
+a streaming/NDJSON interface in this release.
+
+Ctrl+C (`SIGINT`) and `SIGTERM` stop watch cleanly without a cancellation error.
+The exit code is `0`, or `3` if any check failed during the watch, even if it
+later recovered. No watch timeout is supported.
+
+### Wait for a desired state
+
+```sh
+./bin/portcheck --wait 8080
+./bin/portcheck --wait-in-use 8080
+./bin/portcheck --wait --interval 500ms --timeout 30s 3000-3003
+./bin/portcheck --host ::1 --wait-in-use --json 8080
+```
+
+Wait checks immediately, then polls until **all** requested ports match in
+the same cycle. A match in an earlier cycle is not remembered as success.
+Checks are sequential observations, not an atomic snapshot or port reservation.
+Only the final results are printed, in the normal table, quiet tokens, or JSON
+array. Both successful wait modes exit `0`, including when the requested state
+is `IN USE`. No progress banners or intermediate results are printed.
+
+A system error finishes the current cycle, emits its results/diagnostics, and
+stops with exit `3`; unknown errors are not retried forever. A timeout exits
+`1`, with a diagnostic on stderr and **no stdout**. Ctrl+C or `SIGTERM` cancels
+wait cleanly with exit `1` and no cancellation diagnostic or stdout.
+
+Cancellation observed before final output takes precedence over successful
+wait completion. Once final output starts, it finishes (including the JSON
+array) and successful completion exits `0`. If a genuine check failure races
+with cancellation, its diagnostic and exit `3` are preserved; context-only
+cancellation is not a system failure. An interrupted cycle emits no final
+wait results, even when it also contains a system failure.
+
+Watch/wait default to a `1s` polling interval; `--interval` accepts Go durations
+such as `100ms`, `500ms`, and `2s`, with a minimum of `100ms`. `--timeout` must
+be positive (`500ms`, `30s`, `5m`); omit it for an unbounded wait. Polling uses
+a cancellation-aware ticker, with sequential checks and no worker pool.
+Long cycles can take longer than the requested interval. Transitions between
+observations may be missed; wait-in-use indicates bind conflict, not service
+readiness or application health.
+
+`--find`, `--watch`, `--wait`, and `--wait-in-use` are mutually exclusive.
+`--interval` requires watch or either wait mode. `--timeout` requires a wait
+mode. `--quiet --json` remains invalid. These conflicts fail before networking.
+
 ### Try it against a real listener
 
 In **terminal 1**, start a local HTTP server (Python 3 required):
@@ -232,8 +338,8 @@ before your application starts.
 
 | Code | Meaning |
 | --- | --- |
-| 0 | All requested ports are free, a free port is found, or help/version succeeds |
-| 1 | One or more ports are in use, or find has no free port remaining |
+| 0 | All ports free, find succeeds, wait condition satisfied, clean watch stop, or help/version |
+| 1 | Ports in use, find exhausted, wait timeout/cancellation, or one-shot cancellation between checks |
 | 2 | Invalid CLI input, including missing ports |
 | 3 | System error, including failed output writes |
 
@@ -247,7 +353,8 @@ messages, so it is not a machine-readable output interface.
 
 ## What a check means
 
-Portcheck attempts a TCP bind to `127.0.0.1:<port>`, then immediately closes
+Portcheck attempts a TCP bind to the selected local host (default
+`127.0.0.1:<port>`), then immediately closes
 the listener. Only an address-in-use error becomes `IN USE`; permission and
 other failures remain errors. A `FREE` result is an observation, not a port
 reservation: another process can acquire the port immediately afterward.
@@ -257,9 +364,8 @@ range such as `1-65535` may therefore include permission errors and exit `3`
 under a normal user. That is not evidence that those ports are occupied;
 Portcheck does not request elevated privileges.
 
-This version is TCP-only and IPv4-loopback-only. It does not inspect every
-interface, identify processes, check UDP, test remote connectivity, or scan
-networks. Host selection, watch/wait, and process inspection are not part of v0.2.
+This version is TCP-only. It does not inspect every interface, identify
+processes, check UDP, test remote connectivity, or scan networks.
 The checker uses portable Go networking APIs. Linux is runtime-tested;
 Linux, macOS, and Windows compile for amd64 and arm64. Successful compilation
 alone is not a claim of functional support on an untested OS.
@@ -268,7 +374,7 @@ alone is not a claim of functional support on an untested OS.
 
 The public package lives at the module root:
 `github.com/aman-void/portcheck`. Once the version is published, add it to
-your Go project with `go get github.com/aman-void/portcheck@v0.2.0`.
+your Go project with `go get github.com/aman-void/portcheck@v0.3.0`.
 For unpublished local changes, use a local `replace` directive pointing to
 this checkout instead of expecting the remote version to exist.
 
@@ -322,7 +428,25 @@ func main() {
 - Supply a non-nil context. Cancellation/deadlines are checked between
   operations and passed to the listener; they do not reserve ports or promise
   to interrupt every operating-system socket call instantaneously.
-- There is no public range parser or find API in v0.2; those are CLI concerns.
+- `CheckHost(ctx, host, port)` and `CheckPortsHost(ctx, host, ports)` add explicit
+  host selection with the same result and batch semantics. Existing `Check`
+  and `CheckPorts` remain compatible and default to `127.0.0.1`.
+- If a system failure races with cancellation, the error retains both causes;
+  inspect results and use `errors.Is`/`errors.As` rather than assuming that an
+  error matching cancellation contains no system failure.
+- `ValidateHost(host)` performs syntax-only validation, with no DNS/networking.
+  Use `errors.Is(err, portcheck.ErrInvalidHost)` for invalid syntax. Valid syntax
+  does not guarantee successful resolution or a local bind.
+- `Result` and the one-shot JSON schema are unchanged; host-aware callers know
+  the requested host from their input. For example:
+
+  ```go
+  result, err := portcheck.CheckHost(ctx, "::1", 8080)
+  results, batchErr := portcheck.CheckPortsHost(ctx, "127.0.0.1", []int{3000, 8080})
+  // Inspect each result and the returned errors, as with Check/CheckPorts.
+  ```
+
+- There is no public range parser, find, watch, or wait API; those are CLI concerns.
 
 ## Development
 
@@ -373,6 +497,8 @@ go test ./internal/checker -run '^TestCheckListenerLifecycle$' -count=1
 go test ./internal/cli -run '^TestRunRealListener$' -count=1
 go test . -run '^TestCheckRealListener$' -count=1
 go test ./internal/cli -run '^TestRangeAndFindRealListeners$' -count=1
+go test . -run '^TestCheckHostRealListeners$' -count=1
+go test ./internal/cli -run '^TestWaitReal' -count=1
 ```
 
 Tests allocate local TCP listeners dynamically; they need loopback socket
@@ -386,11 +512,11 @@ go test ./internal/cli -run '^$' -bench '^BenchmarkRangeExpansion$' -benchmem
 
 ### Architecture
 
-`cmd/portcheck` handles process exit; `internal/cli` owns parsing, find,
-output, and exit-code selection. The CLI calls the public root package,
+`cmd/portcheck` handles signals and process exit; `internal/cli` owns parsing,
+find, watch/wait orchestration, output, and exit-code selection. The CLI calls the public root package,
 which owns library validation and batch semantics; `internal/checker` owns
 binding and error classification. The library never imports the CLI.
-Tests use internal function parameters to control failures,
+The checker remains stateless. Tests use internal function parameters to control failures and timing,
 without mutable global hooks. Plans live under `plans/` and describe future
 scope, not currently available features. Each version requires human review
 before the next begins.

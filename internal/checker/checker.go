@@ -1,4 +1,4 @@
-// Package checker checks TCP binding availability on IPv4 loopback.
+// Package checker checks local TCP binding availability.
 package checker
 
 import (
@@ -32,20 +32,29 @@ func Check(port int) Result {
 
 // CheckContext uses the same bind classification with a context-aware listener.
 func CheckContext(ctx context.Context, port int) Result {
+	return CheckHost(ctx, "127.0.0.1", port)
+}
+
+// CheckHost binds the requested host using the Go networking layer.
+func CheckHost(ctx context.Context, host string, port int) Result {
 	var config net.ListenConfig
-	return check(port, func(network, address string) (net.Listener, error) {
+	return checkHost(host, port, func(network, address string) (net.Listener, error) {
 		return config.Listen(ctx, network, address)
 	})
 }
 
 func check(port int, listen func(string, string) (net.Listener, error)) Result {
+	return checkHost("127.0.0.1", port, listen)
+}
+
+func checkHost(host string, port int, listen func(string, string) (net.Listener, error)) Result {
 	result := Result{Port: port}
 	if port < 1 || port > 65535 {
 		result.Status = StatusError
 		result.Err = fmt.Errorf("port %d must be between 1 and 65535", port)
 		return result
 	}
-	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	address := net.JoinHostPort(host, strconv.Itoa(port))
 	listener, err := listen("tcp", address)
 	if err != nil {
 		if errors.Is(err, syscall.EADDRINUSE) {

@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/aman-void/portcheck"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 const help = `portcheck - Check local TCP port availability
 
@@ -24,16 +25,27 @@ Options:
   -q, --quiet      Output only the status
       --json       Output an ordered JSON array (conflicts with --quiet)
       --find       Print the first free port at or above the starting port
+      --host HOST  Local IP address or DNS hostname (default 127.0.0.1)
+      --watch      Emit initial state and changes until interrupted
+      --wait       Wait until all ports are free
+      --wait-in-use Wait until all ports are in use
+      --interval D Polling interval (default 1s, minimum 100ms)
+      --timeout D  Positive wait timeout (default: no timeout)
   --              End option parsing
 
-Checks TCP binding availability on 127.0.0.1. Ports must be 1-65535.
+Checks local TCP binding availability, not remote connectivity. Ports must be 1-65535.
 Options may appear before or after ports. Duplicate ports are checked once.
 Ranges such as 3000-3010 include both endpoints. --find takes one single port.
 --find prints a port number, also in quiet mode; JSON contains one free result.
+Host IPs are unbracketed, including ::1. Hostnames check one Go-selected address.
+Watch, wait, wait-in-use, and find are mutually exclusive. --watch --json is invalid.
+--interval requires watch/wait; --timeout requires wait. Durations use Go syntax.
+Wait emits only final results. Watch quiet mode emits only changed status tokens.
+Interrupt: watch exits 0 (3 if checks failed); wait exits 1. Wait timeout exits 1.
 
 Exit codes:
-  0  All ports free, a free port found, or help/version
-  1  One or more ports in use, or no free port found
+  0  All ports free, a free port found, wait satisfied, clean watch stop, or help/version
+  1  Ports in use, find exhausted, or wait canceled/timed out
   2  Invalid input
   3  System error
 
@@ -44,26 +56,40 @@ Examples:
   portcheck 3000 8080-8083
   portcheck --find 3000
   portcheck --json 3000 8080
+  portcheck --host ::1 8080
+  portcheck --watch --interval 2s 8080
+  portcheck --wait --timeout 30s 8080
 `
 
 type options struct {
-	ports   []int
-	quiet   bool
-	help    bool
-	version bool
-	json    bool
-	find    bool
+	ports    []int
+	quiet    bool
+	help     bool
+	version  bool
+	json     bool
+	find     bool
+	host     string
+	watch    bool
+	wait     bool
+	inUse    bool
+	interval time.Duration
+	timeout  time.Duration
 }
 
 // Run writes results and diagnostics to the supplied streams and returns an exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
-	return run(args, stdout, stderr, func(port int) portcheck.Result {
-		result, _ := portcheck.Check(context.Background(), port)
+	return RunContext(context.Background(), args, stdout, stderr)
+}
+
+// RunContext supports cancellation; the executable owns signal handling.
+func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return runContext(ctx, args, stdout, stderr, func(ctx context.Context, host string, port int) portcheck.Result {
+		result, _ := portcheck.CheckHost(ctx, host, port)
 		return result
 	})
 }
 
-func run(args []string, stdout, stderr io.Writer, check func(int) portcheck.Result) int {
+func runContext(ctx context.Context, args []string, stdout, stderr io.Writer, check func(context.Context, string, int) portcheck.Result) int {
 	opts, err := parse(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
@@ -83,13 +109,29 @@ func run(args []string, stdout, stderr io.Writer, check func(int) portcheck.Resu
 		}
 		return 0
 	}
+	if opts.watch || opts.wait || opts.inUse {
+		return runPolling(ctx, opts, stdout, stderr, check, nil, time.Now)
+	}
+	checkPort := func(port int) portcheck.Result {
+		if err := ctx.Err(); err != nil {
+			return portcheck.Result{Port: port, Status: portcheck.StatusError, Err: err}
+		}
+		return check(ctx, opts.host, port)
+	}
 	if opts.find {
-		return runFind(opts, stdout, stderr, check)
+		return runFind(opts, stdout, stderr, checkPort)
 	}
 	results := make([]portcheck.Result, 0, len(opts.ports))
 	exit := 0
 	for _, port := range opts.ports {
-		result := check(port)
+		if ctx.Err() != nil {
+			fmt.Fprintf(stderr, "error: check canceled: %v\n", ctx.Err())
+			if exit == 3 {
+				return 3
+			}
+			return 1
+		}
+		result := checkPort(port)
 		results = append(results, result)
 		switch result.Status {
 		case portcheck.StatusInUse:
@@ -109,10 +151,12 @@ func run(args []string, stdout, stderr io.Writer, check func(int) portcheck.Resu
 }
 
 func parse(args []string) (options, error) {
-	var opts options
+	opts := options{host: "127.0.0.1", interval: time.Second}
 	var tokens []string
+	var intervalSet, timeoutSet bool
 	flags := true
-	for _, arg := range args {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		if flags {
 			switch arg {
 			case "--":
@@ -133,6 +177,38 @@ func parse(args []string) (options, error) {
 			case "--find":
 				opts.find = true
 				continue
+			case "--watch":
+				opts.watch = true
+				continue
+			case "--wait":
+				opts.wait = true
+				continue
+			case "--wait-in-use":
+				opts.inUse = true
+				continue
+			case "--host", "--interval", "--timeout":
+				if i+1 == len(args) || strings.HasPrefix(args[i+1], "--") || (arg == "--host" && strings.HasPrefix(args[i+1], "-")) {
+					return opts, fmt.Errorf("%s requires a value", arg)
+				}
+				i++
+				value := args[i]
+				if arg == "--host" {
+					opts.host = value
+					continue
+				}
+				duration, err := time.ParseDuration(value)
+				if err != nil || duration <= 0 {
+					return opts, fmt.Errorf("%s requires a positive Go duration, got %q", arg, value)
+				}
+				if arg == "--interval" {
+					if duration < 100*time.Millisecond {
+						return opts, fmt.Errorf("--interval must be at least 100ms")
+					}
+					opts.interval, intervalSet = duration, true
+				} else {
+					opts.timeout, timeoutSet = duration, true
+				}
+				continue
 			}
 			if strings.HasPrefix(arg, "-") {
 				return opts, fmt.Errorf("unknown option %q", arg)
@@ -146,6 +222,27 @@ func parse(args []string) (options, error) {
 	}
 	if opts.quiet && opts.json {
 		return opts, fmt.Errorf("--quiet and --json cannot be used together")
+	}
+	modes := 0
+	for _, enabled := range []bool{opts.find, opts.watch, opts.wait, opts.inUse} {
+		if enabled {
+			modes++
+		}
+	}
+	if modes > 1 {
+		return opts, fmt.Errorf("--find, --watch, --wait, and --wait-in-use are mutually exclusive")
+	}
+	if opts.watch && opts.json {
+		return opts, fmt.Errorf("--watch and --json cannot be used together; JSON output is a final result array")
+	}
+	if intervalSet && !(opts.watch || opts.wait || opts.inUse) {
+		return opts, fmt.Errorf("--interval requires --watch, --wait, or --wait-in-use")
+	}
+	if timeoutSet && !(opts.wait || opts.inUse) {
+		return opts, fmt.Errorf("--timeout requires --wait or --wait-in-use")
+	}
+	if err := portcheck.ValidateHost(opts.host); err != nil {
+		return opts, err
 	}
 	if opts.find {
 		if len(tokens) != 1 {
