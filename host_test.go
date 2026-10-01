@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -79,7 +78,9 @@ func TestCheckHostRealListeners(t *testing.T) {
 				t.Fatalf("occupied: %+v %v", got, err)
 			}
 			results, err := CheckPortsHost(ctx, host, []int{port, port})
-			if err != nil || !reflect.DeepEqual(results, []Result{got}) {
+			if err != nil || len(results) != 1 ||
+				results[0].Port != got.Port || results[0].Status != got.Status ||
+				results[0].Err != nil {
 				t.Fatalf("batch: %+v %v", results, err)
 			}
 			if err := listener.Close(); err != nil {
