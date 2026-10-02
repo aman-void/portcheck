@@ -36,16 +36,31 @@ case "$arch" in
   *) die "unsupported architecture '$arch'. Build from source: go install github.com/$REPO/cmd/$BIN@latest" ;;
 esac
 
+# Accept either the tag form (v1.0.0-rc.1) or the bare version (1.0.0-rc.1).
+# Release archive names carry the bare form, so strip a leading v before use.
 version=${PORTCHECK_VERSION:-latest}
+[ "$version" = "latest" ] || version=${version#v}
+
 if [ -n "${PORTCHECK_BASE_URL:-}" ]; then
-  # Override for mirrors, air-gapped installs, and testing.
-  base=${PORTCHECK_BASE_URL%/}
+  # Override for mirrors, air-gapped installs, and testing. Validate it, so a
+  # stray or mistyped value fails here instead of producing a nonsense URL.
+  case ${PORTCHECK_BASE_URL} in
+    http://*|https://*) base=${PORTCHECK_BASE_URL%/} ;;
+    *) die "PORTCHECK_BASE_URL must start with http:// or https://, got '$PORTCHECK_BASE_URL'" ;;
+  esac
 elif [ "$version" = "latest" ]; then
+  # GitHub excludes prereleases from releases/latest, so latest resolves to the
+  # newest stable release, or fails when only prereleases exist.
   base="https://github.com/$REPO/releases/latest/download"
   version=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$base/$BIN" 2>/dev/null | sed 's|.*/tag/||' || echo unknown)
-  [ "$version" != "unknown" ] || die "could not determine the latest release"
+  if [ "$version" = "unknown" ] || [ -z "$version" ]; then
+    die "no published stable release found at $base
+If you are installing a prerelease, pin it explicitly:
+  PORTCHECK_VERSION=v1.0.0-rc.1 <install command>"
+  fi
+  version=${version#v}
 else
-  base="https://github.com/$REPO/releases/download/$version"
+  base="https://github.com/$REPO/releases/download/v$version"
 fi
 
 if [ "$os" = "windows" ]; then
@@ -57,6 +72,8 @@ fi
 printf 'portcheck %s for %s/%s\n' "$version" "$os" "$arch"
 
 # --- 2. Fetch the archive and the checksum manifest --------------------------
+
+printf 'downloading %s\n' "$archive"
 
 need curl
 tmp=$(mktemp -d)
