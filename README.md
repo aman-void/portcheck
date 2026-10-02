@@ -6,7 +6,12 @@ Check ports and ranges, find an available port, watch state changes, or wait
 for a desired state. Optionally identify visible Linux listening processes.
 Test TCP connectivity with `--connect`, or combine factual local observations
 with `doctor`. Consume results through JSON and a small Go API.
-The **v1.0 release candidate** uses only Go's standard library, defaults to IPv4 loopback
+
+```sh
+curl -fsSL https://github.com/aman-void/portcheck/releases/latest/download/install.sh | sh
+```
+
+It uses only Go's standard library, defaults to IPv4 loopback
 (`127.0.0.1`), and supports explicit local IPv4/IPv6 addresses and hostnames.
 
 Development builds report `1.0.0-dev`; release builds inject their version.
@@ -19,6 +24,29 @@ PORT    STATUS
 3000    FREE
 8080    IN USE
 ```
+
+## Small by design
+
+| | |
+| --- | --- |
+| Download | ~1.3 MB compressed |
+| Installed binary | ~3.2–3.5 MB uncompressed, across all six targets |
+| Runtime dependencies | none, on every platform |
+| Third-party Go modules | zero, so there is no `go.sum` to audit |
+| Non-test source | ~2,000 lines of Go across 23 files |
+| Installer | 3.7 KB of POSIX shell |
+| Startup | no config file, no daemon, no database |
+
+Every feature is standard library only: `net`, `net/netip`, `os/signal`,
+`encoding/json`, and `runtime/debug`. Nothing is fetched at runtime. Because
+there is no dependency graph, there is no supply-chain surface to patch, and
+`go list -m all` prints exactly one line.
+
+Binary size is dominated by the Go runtime, not by this program; the compiled
+code is a small part of it. The installer is under 4 KB and verifies SHA-256
+before installing anything.
+
+## Quick start
 
 ## Quick start
 
@@ -64,20 +92,51 @@ Remote installation depends on the repository being published at
 
 ### Install a published version
 
-Once a release tag is published:
+**Prebuilt binary, no Go required.** This is the recommended path. The installer
+picks the right archive for your platform, verifies its SHA-256 against the
+published `SHA256SUMS`, and installs to `~/.local/bin` without needing `sudo`:
 
 ```sh
-go install github.com/aman-void/portcheck/cmd/portcheck@v1.0.0
-# Or select the latest published version:
+curl -fsSL https://github.com/aman-void/portcheck/releases/latest/download/install.sh | sh
+portcheck --version
+```
+
+Pin a specific version instead of tracking the latest:
+
+```sh
+PORTCHECK_VERSION=v1.0.0 \
+  curl -fsSL https://github.com/aman-void/portcheck/releases/latest/download/install.sh | sh
+```
+
+The installer needs `curl`, `tar` (or `unzip` on Windows), and a POSIX shell; it
+refuses to install anything whose checksum does not match. Two optional variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORTCHECK_VERSION` | latest release tag | Install a specific version |
+| `PORTCHECK_INSTALL` | `$HOME/.local/bin` | Install elsewhere, e.g. a system-wide directory |
+
+If `$HOME/.local/bin` is not on your `PATH`, the installer prints the line to
+add. It never uses `sudo`; installing system-wide is an explicit choice:
+
+```sh
+curl -fsSL https://github.com/aman-void/portcheck/releases/latest/download/install.sh \
+  | PORTCHECK_INSTALL=/usr/local/bin sudo sh
+```
+
+**From source**, if you already have Go 1.27.1 or newer:
+
+```sh
 go install github.com/aman-void/portcheck/cmd/portcheck@latest
 ```
 
 Versioned Go installations read their version from Go build information. Local
 checkouts retain `1.0.0-dev`; linker-injected versions take precedence.
 
-### Install a release binary
+### Install a release binary manually
 
-Download the archive for your platform and `SHA256SUMS` from
+If you would rather download and unpack an archive yourself, get the archive for
+your platform and `SHA256SUMS` from
 [GitHub Releases](https://github.com/aman-void/portcheck/releases). When available,
 an example Linux amd64 installation is:
 
