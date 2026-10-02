@@ -1,0 +1,41 @@
+name: Release candidate or stable draft
+
+on:
+  push:
+    tags: ['v1.*']
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    uses: ./.github/workflows/ci.yml
+
+  package:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build deterministic archives
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: bash scripts/release.sh "${TAG#v}" dist/release
+      - name: Verify checksums
+        run: cd dist/release && sha256sum -c SHA256SUMS
+      - name: Create draft for owner review
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          flags=()
+          [[ $TAG != *-rc.* ]] || flags+=(--prerelease)
+          gh release create "$TAG" dist/release/* --verify-tag --draft \
+            "${flags[@]}" --title "Portcheck $TAG" --notes-file docs/release-notes.md
