@@ -37,5 +37,13 @@ jobs:
         run: |
           flags=()
           [[ $TAG != *-rc.* ]] || flags+=(--prerelease)
+          # Render the tagged version into the notes. Write outside dist/release
+          # so the rendered file is not matched by the dist/release/* asset glob.
+          notes="$RUNNER_TEMP/notes.md"
+          sed "s|{{VERSION}}|${TAG#v}|g" docs/release-notes.md > "$notes"
+          if grep -q '{{VERSION}}' "$notes"; then
+            echo "unrendered {{VERSION}} left in release notes" >&2
+            exit 1
+          fi
           gh release create "$TAG" dist/release/* --verify-tag --draft \
-            "${flags[@]}" --title "Portcheck $TAG" --notes-file docs/release-notes.md
+            "${flags[@]}" --title "Portcheck $TAG" --notes-file "$notes"
