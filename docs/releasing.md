@@ -90,8 +90,12 @@ created by the packaging script.
 2. Approve and commit the candidate; verify clean `git status`.
 3. With explicit approval, tag the intended commit `v1.0.0-rc.1` and push it.
 4. The tag workflow reruns native/cross-platform CI, builds archives/checksums,
-   and creates a **draft prerelease**. Review artifacts and update the draft's
-   notes with the actual version, tested platforms, and CI evidence before publishing.
+   and creates a **draft prerelease**. `docs/release-notes.md` is the published
+   notes body: the workflow substitutes `{{VERSION}}` with the tag and fails if
+   any placeholder is left, so that file must stay free of editor instructions
+   and hardcoded versions — it is published verbatim for both prerelease and
+   final tags. Review artifacts and update the draft's notes with tested platforms
+   and CI evidence before publishing.
 5. Install/extract and smoke-test the candidate on claimed native platforms.
 6. Only after candidate acceptance, approve the final clean release commit and
    `v1.0.0` tag. Build from that exact commit, check `--version`, publish the
