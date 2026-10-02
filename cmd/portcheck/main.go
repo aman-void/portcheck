@@ -10,6 +10,7 @@ import (
 )
 
 func main() {
+	prepareSignals()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	code := cli.RunContext(ctx, os.Args[1:], os.Stdout, os.Stderr)
 	stop()
