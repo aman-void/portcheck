@@ -50,6 +50,23 @@ jobs:
       - run: go build ./...
       - name: Dependency contract
         run: test "$(go list -m all)" = github.com/aman-void/portcheck
+      # Release invariants are enforced by the tag workflow, which knows the
+      # intended version. On a branch there is no version to check against, so
+      # only confirm the checker and installer are syntactically valid and that
+      # a source build still reports the development default.
+      - name: Release tooling sanity
+        shell: bash
+        run: |
+          bash -n scripts/release.sh
+          bash -n scripts/check-version.sh
+          sh -n install.sh
+          built=$(mktemp -d)/portcheck
+          go build -trimpath -buildvcs=false -o "$built" ./cmd/portcheck
+          # -buildvcs=false keeps Go from stamping the module version, so this
+          # asserts the development default. A build without it would report a
+          # tag when HEAD is tagged, which is correct but not what is checked.
+          test "$("$built" --version)" = "portcheck version 1.0.0-dev" \
+            || { echo "source build must report 1.0.0-dev" >&2; exit 1; }
 
   cross-build:
     runs-on: ubuntu-latest
