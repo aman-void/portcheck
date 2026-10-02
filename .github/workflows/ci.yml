@@ -26,7 +26,15 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Formatting
-        run: test -z "$(gofmt -l .)"
+        # Report the offending files instead of a bare exit code. A whole-tree
+        # failure here usually means a CRLF checkout rather than real
+        # formatting drift; .gitattributes pins LF to prevent that.
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            printf 'gofmt -l reported these unformatted files:\n%s\n' "$unformatted"
+            exit 1
+          fi
       - run: go test ./... -count=1
       - run: go test -race ./... -count=1
       - run: go vet ./...

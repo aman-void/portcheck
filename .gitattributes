@@ -1,0 +1,6 @@
+# Keep the working tree LF on every platform, including Windows checkouts where
+# Git for Windows defaults to core.autocrlf=true. Without this, a checkout
+# rewrites LF to CRLF, and gofmt then reports every Go file as unformatted,
+# because gofmt requires LF line endings. Normalized content also keeps
+# cross-platform diffs, archives, and release checksums predictable.
+* text=auto eol=lf
