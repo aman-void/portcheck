@@ -12,8 +12,6 @@ import (
 	"github.com/aman-void/portcheck/internal/process"
 )
 
-const version = "0.5.0"
-
 const help = `portcheck - Check local TCP port availability
 
 Usage:
@@ -134,7 +132,7 @@ func runContextWithConnector(ctx context.Context, args []string, stdout, stderr 
 		return 0
 	}
 	if opts.version {
-		if _, err := fmt.Fprintf(stdout, "portcheck version %s\n", version); err != nil {
+		if _, err := fmt.Fprintf(stdout, "portcheck version %s\n", applicationVersion()); err != nil {
 			fmt.Fprintf(stderr, "error: write output: %v\n", err)
 			return 3
 		}

@@ -59,8 +59,8 @@ func TestHelpAndVersion(t *testing.T) {
 		{[]string{"--help"}, help},
 		{[]string{"--help", "abc"}, help},
 		{[]string{"--help", "--version"}, help},
-		{[]string{"-v"}, "portcheck version 0.5.0\n"},
-		{[]string{"--version"}, "portcheck version 0.5.0\n"},
+		{[]string{"-v"}, "portcheck version " + version + "\n"},
+		{[]string{"--version"}, "portcheck version " + version + "\n"},
 	} {
 		var stdout, stderr bytes.Buffer
 		code := run(tc.args, &stdout, &stderr, func(int) portcheck.Result {
