@@ -9,10 +9,6 @@ import (
 	"github.com/aman-void/portcheck/internal/process"
 )
 
-func render(w io.Writer, results []portcheck.Result, opts options) error {
-	return renderWithProcesses(w, results, opts, nil)
-}
-
 func renderWithProcesses(w io.Writer, results []portcheck.Result, opts options, details map[int]processDetail) error {
 	if opts.json {
 		return writeJSONWithProcesses(w, results, details)

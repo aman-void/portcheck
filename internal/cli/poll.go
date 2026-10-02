@@ -192,10 +192,6 @@ func errorText(err error) string {
 	return err.Error()
 }
 
-func writeWatch(w io.Writer, opts options, result portcheck.Result, timestamp time.Time) error {
-	return writeWatchWithProcesses(w, opts, result, timestamp, processDetail{}, nil)
-}
-
 func writeWatchWithProcesses(w io.Writer, opts options, result portcheck.Result, timestamp time.Time, detail processDetail, observedSince *time.Time) error {
 	if opts.quiet {
 		return writeResults(w, []portcheck.Result{result}, true)

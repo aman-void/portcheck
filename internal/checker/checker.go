@@ -3,11 +3,9 @@ package checker
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"strconv"
-	"syscall"
 )
 
 type Status int
@@ -28,11 +26,6 @@ type Result struct {
 // Retained as a background-context entrypoint for the checker regression tests.
 func Check(port int) Result {
 	return check(port, net.Listen)
-}
-
-// CheckContext uses the same bind classification with a context-aware listener.
-func CheckContext(ctx context.Context, port int) Result {
-	return CheckHost(ctx, "127.0.0.1", port)
 }
 
 // CheckHost binds the requested host using the Go networking layer.
@@ -57,7 +50,7 @@ func checkHost(host string, port int, listen func(string, string) (net.Listener,
 	address := net.JoinHostPort(host, strconv.Itoa(port))
 	listener, err := listen("tcp", address)
 	if err != nil {
-		if errors.Is(err, syscall.EADDRINUSE) {
+		if addressInUse(err) {
 			result.Status = StatusInUse
 		} else {
 			result.Status = StatusError
