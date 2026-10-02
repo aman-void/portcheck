@@ -48,6 +48,9 @@ jobs:
   cross-build:
     runs-on: ubuntu-latest
     strategy:
+      # Report every failing target instead of cancelling the siblings: the
+      # point of this matrix is to know which of the six pairs break.
+      fail-fast: false
       matrix:
         os: [linux, darwin, windows]
         arch: [amd64, arm64]
