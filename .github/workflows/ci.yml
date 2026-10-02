@@ -32,8 +32,14 @@ jobs:
         # Report the offending files instead of a bare exit code. A whole-tree
         # failure here usually means a CRLF checkout rather than real
         # formatting drift; .gitattributes pins LF to prevent that.
+        #
+        # Dot-directories are filtered out: gofmt descends into them but the Go
+        # toolchain ignores them, so .agents/ holds vendored third-party
+        # examples whose formatting is not this project's to enforce. Uses sed
+        # rather than grep -v, which would exit non-zero when it filters
+        # everything and fail a clean tree under bash -e.
         run: |
-          unformatted="$(gofmt -l .)"
+          unformatted="$(gofmt -l . | sed '/^\./d')"
           if [ -n "$unformatted" ]; then
             printf 'gofmt -l reported these unformatted files:\n%s\n' "$unformatted"
             exit 1
