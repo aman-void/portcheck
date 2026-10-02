@@ -46,7 +46,7 @@ jobs:
         run: bash scripts/release.sh "${TAG#v}" dist/release
       - name: Verify checksums
         run: cd dist/release && sha256sum -c SHA256SUMS
-      - name: Create draft for owner review
+      - name: Create or complete the draft for owner review
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -62,5 +62,31 @@ jobs:
             echo "unrendered {{VERSION}} left in release notes" >&2
             exit 1
           fi
-          gh release create "$TAG" dist/release/* --verify-tag --draft \
-            "${flags[@]}" --title "Portcheck $TAG" --notes-file "$notes"
+          # Idempotent: if a release already exists for this tag, attach the
+          # missing assets instead of failing. Covers an owner publishing an
+          # empty release while this job was still building.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists; uploading assets to it"
+            gh release upload "$TAG" dist/release/* --clobber
+          else
+            gh release create "$TAG" dist/release/* --verify-tag --draft \
+              "${flags[@]}" --title "Portcheck $TAG" --notes-file "$notes"
+          fi
+      - name: Confirm the draft carries every asset
+        # An owner can publish an empty release while this job is still running.
+        # When that happens the tag already has a release, gh release create
+        # skips attaching files, and the published release has zero assets. Fail
+        # loudly here instead of leaving an empty release published.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          expected=$(find dist/release -type f ! -name '.*' | wc -l)
+          attached=$(gh release view "$TAG" --json assets --jq '.assets | length')
+          if [ "$attached" -ne "$expected" ]; then
+            echo "release $TAG has $attached assets, expected $expected" >&2
+            echo "if a release already exists for this tag, delete it (keeping the tag) and re-push the tag" >&2
+            exit 1
+          fi
+          printf 'draft %s carries %s assets\n' "$TAG" "$attached"
