@@ -20,10 +20,13 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          # The module has no external dependencies and therefore no go.sum, so
+          # there is no dependency file to key a build cache on. Re-enabling the
+          # cache would add failure modes without adding value.
           cache: false
       - name: Formatting
         # Report the offending files instead of a bare exit code. A whole-tree
@@ -49,10 +52,11 @@ jobs:
         os: [linux, darwin, windows]
         arch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          # No external modules means no go.sum to key a build cache on.
           cache: false
       - name: Build CLI and compile tests
         env:
