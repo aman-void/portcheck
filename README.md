@@ -14,8 +14,10 @@ curl -fsSL https://github.com/aman-void/portcheck/releases/latest/download/insta
 It uses only Go's standard library, defaults to IPv4 loopback
 (`127.0.0.1`), and supports explicit local IPv4/IPv6 addresses and hostnames.
 
-Development builds report `1.0.0-dev`; release builds inject their version.
-Final `v1.0.0` publication is pending candidate validation and owner review.
+The current release candidate is **`v1.0.0-rc.1`**. Stable `v1.0.0` is not
+released yet. Untagged source builds report `1.0.0-dev`; a build from a tagged
+commit reports that tag, and release builds inject their version. Final `v1.0.0`
+publication is pending candidate validation and owner review.
 See the [compatibility/API/JSON contract](docs/contracts.md),
 [platform matrix](docs/platforms.md), and [release checklist](docs/releasing.md).
 
@@ -29,8 +31,8 @@ PORT    STATUS
 
 | | |
 | --- | --- |
-| Download | ~1.3 MB compressed |
-| Installed binary | ~3.2–3.5 MB uncompressed, across all six targets |
+| Download | 1.26–1.42 MB per archive |
+| Installed binary | 3.05–3.29 MB per executable |
 | Runtime dependencies | none, on every platform |
 | Third-party Go modules | zero, so there is no `go.sum` to audit |
 | Non-test source | ~2,000 lines of Go across 23 files |
@@ -45,6 +47,24 @@ there is no dependency graph, there is no supply-chain surface to patch, and
 Binary size is dominated by the Go runtime, not by this program; the compiled
 code is a small part of it. The installer is under 4 KB and verifies SHA-256
 before installing anything.
+
+Those figures are measured, not estimated. Every `make release` prints the
+actual byte size of each executable and archive for all six targets, so the
+ranges above can be checked against real artifacts:
+
+```text
+TARGET                       BINARY      ARCHIVE
+---------------------- ------------ ------------
+linux/amd64                 3383456      1464082
+linux/arm64                 3276960      1320014
+darwin/amd64                3422032      1469920
+darwin/arm64                3246594      1356146
+windows/amd64               3453440      1484727
+windows/arm64               3202048      1327165
+```
+
+An archive is larger than the executable it contains because it also carries
+`LICENSE` and `BUILDINFO.txt`.
 
 ## Quick start
 
@@ -130,8 +150,9 @@ curl -fsSL https://github.com/aman-void/portcheck/releases/latest/download/insta
 go install github.com/aman-void/portcheck/cmd/portcheck@latest
 ```
 
-Versioned Go installations read their version from Go build information. Local
-checkouts retain `1.0.0-dev`; linker-injected versions take precedence.
+Versioned Go installations read their version from Go build information. An
+untagged checkout builds report `1.0.0-dev`; a checkout sitting on a tag
+reports that tag, and linker-injected versions take precedence over both.
 
 ### Install a release binary manually
 
