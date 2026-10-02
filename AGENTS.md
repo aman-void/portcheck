@@ -20,6 +20,26 @@
 - From v0.4, process inspection is optional, read-only, and isolated in platform-specific files. Multiple owners are possible; lookup failures must not change port status.
 - From v0.5, connectivity is a separate TCP dial operation: no payloads, retries, or scanning. Classify wrapped errors rather than matching strings; do not infer firewall or application health.
 
+## Release and version discipline
+- A release version is one coordinated change across the Git tag, the injected application version, release archive filenames, README current-release references, and release notes. Never update only the README, or only the version constant.
+- Inspect `.github/workflows/release.yml`, `scripts/release.sh`, `scripts/check-version.sh`, `Makefile`, `README.md`, `docs/release-notes.md`, and `internal/cli/version.go` before changing any release information.
+- `bash scripts/check-version.sh <1.x.y[-rc.N]>` is the enforcement point. It builds the binary, asserts `--version`, checks archive names, and scans the current-release documentation. Do not create or push a release tag until it passes.
+- Release notes use the `{{VERSION}}` placeholder substituted by the workflow. Never hardcode a version there; one file must serve both prerelease and final tags.
+- Distinguish the three versions deliberately: `1.0.0-dev` (untagged source builds), the current candidate, and a future stable release. Do not claim a stable release exists before it is published.
+- Version reporting depends on build flags. `go build` without `-buildvcs=false` on a tagged commit reports that tag, because Go stamps the module version; with the flag, or on an untagged checkout, it reports `1.0.0-dev`. `-X` injection always wins. `release.sh` and CI use `-buildvcs=false` plus `-X` so release artifacts are reproducible and tag-independent.
+- Do not commit unrelated changes as part of release preparation. Keep version bumps reviewable on their own.
+- Sizes documented in the README come from the table `scripts/release.sh` prints. Re-measure rather than estimating, and do not simplify the six-target platform matrix to make size reporting easier.
+
+## Order of operations
+- Distinguish these five steps; a successful local edit proves none of the later ones:
+  1. modify files
+  2. validate locally (`gofmt -l .`, `go test ./...`, `go vet ./...`, `bash -n scripts/*.sh`, `scripts/check-version.sh <version>`)
+  3. commit
+  4. push
+  5. create and push the release tag
+- Never commit, tag, or push without explicit user permission.
+- Let CI be the final enforcement layer. If CI reports a version mismatch, stop the release rather than publishing inconsistent artifacts; fix the repository and release again.
+
 ## Verification and contracts
 - `make build` writes `bin/portcheck`; `go build ./cmd/portcheck` writes the root binary. Use the built binary when checking exit codes: `go run` does not preserve nonzero application exit codes.
 - Focused real-socket checks: `go test ./internal/checker -run '^TestCheckListenerLifecycle$' -count=1` and `go test ./internal/cli -run '^TestRunRealListener$' -count=1`.
