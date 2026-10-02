@@ -39,7 +39,12 @@ func TestBuiltBinaryContracts(t *testing.T) {
 		return listener
 	}
 	busy := listen()
-	port := strconv.Itoa(busy.Addr().(*net.TCPAddr).Port)
+	busyPort := busy.Addr().(*net.TCPAddr).Port
+	port := strconv.Itoa(busyPort)
+	// freePort proves a currently-unused port. Allocating on :0 then closing
+	// narrows the race but cannot remove it: asserting that a port is free
+	// inherently requires an unheld port. Discovery from freePort is avoided
+	// below for the same reason; it starts from the held busy port instead.
 	free := listen()
 	freePort := strconv.Itoa(free.Addr().(*net.TCPAddr).Port)
 	if err := free.Close(); err != nil {
@@ -59,7 +64,6 @@ func TestBuiltBinaryContracts(t *testing.T) {
 		{"v01 order/dedup", []string{"--quiet", port, freePort, port}, 1, "IN_USE\nFREE\n", false},
 		{"v01 invalid", []string{"70000"}, 2, "", false},
 		{"v02 range/json", []string{"--json", port + "-" + port, port}, 1, "", true},
-		{"v02 find", []string{"--find", "--quiet", freePort}, 0, freePort + "\n", false},
 		{"v03 host shorthand", []string{"--host", "--quiet", port}, 1, "IN_USE\n", false},
 		{"v03 wait", []string{"--wait", "--json", freePort}, 0, "", true},
 		{"v03 wait-in-use", []string{"--wait-in-use", "--quiet", port}, 0, "IN_USE\n", false},
@@ -117,6 +121,24 @@ func TestBuiltBinaryContracts(t *testing.T) {
 			}
 		})
 	}
+	t.Run("find skips an occupied start port", func(t *testing.T) {
+		// Starting from the held listener keeps this race-free: the occupied
+		// start port is guaranteed busy, so the result must be strictly
+		// greater rather than equal.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, binary, "--find", "--quiet", port).Output()
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		found, err := strconv.Atoi(strings.TrimSpace(string(out)))
+		if err != nil {
+			t.Fatalf("find output %q: %v", out, err)
+		}
+		if found <= busyPort {
+			t.Fatalf("find=%d want > %d (occupied start port)", found, busyPort)
+		}
+	})
 	t.Run("broken stdout pipe", func(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			t.Skip("Unix SIGPIPE regression; Windows write failures covered by CLI tests")
