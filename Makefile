@@ -3,6 +3,10 @@
 # Enable color only in a terminal. Override with COLOR=1 or disable with NO_COLOR=1.
 COLOR ?= auto
 
+# The source default is 1.0.0-dev. Only explicit builds inject a release version.
+VERSION ?=
+LDFLAGS = $(if $(VERSION),-X github.com/aman-void/portcheck/internal/cli.version=$(VERSION))
+
 # Detect the recipe's stdout, not $(shell ...), whose stdout Make captures.
 define colors
 cyan=; green=; bold=; reset=; \
@@ -15,7 +19,7 @@ endef
 announce = @$(colors) printf '%b%s%b\n' "$$cyan" '==> $(1)' "$$reset"
 success = @$(colors) printf '%b%s%b\n' "$$green" ' OK $(1)' "$$reset"
 
-.PHONY: help fmt test vet build run clean
+.PHONY: help fmt test vet build run clean release
 
 help:
 	@$(colors) printf '\n%b%s%b\n' "$$bold$$cyan" 'Portcheck · development commands' "$$reset"
@@ -25,6 +29,7 @@ help:
 	@$(colors) printf '  %b%-12s%b %s\n' "$$green" 'make build' "$$reset" 'Build bin/portcheck'
 	@$(colors) printf '  %b%-12s%b %s\n' "$$green" 'make run' "$$reset" 'Run from source with ARGS="..."'
 	@$(colors) printf '  %b%-12s%b %s\n' "$$green" 'make clean' "$$reset" 'Remove known binary outputs'
+	@$(colors) printf '  %b%-12s%b %s\n' "$$green" 'make release' "$$reset" 'Build archives/checksums; VERSION and OUT required'
 	@$(colors) printf '\n  %b%s%b\n' "$$bold" 'Examples' "$$reset"
 	@printf '    make fmt test vet build\n    make run ARGS="--help"\n    ./bin/portcheck 3000 8080\n\n'
 	@printf '  Color: automatic; COLOR=1 forces it, NO_COLOR=1 disables it.\n\n'
@@ -46,12 +51,16 @@ vet:
 
 build:
 	$(call announce,Building Portcheck)
-	@go build -o bin/portcheck ./cmd/portcheck
+	@go build -trimpath -ldflags '$(LDFLAGS)' -o bin/portcheck ./cmd/portcheck
 	$(call success,Binary ready: ./bin/portcheck)
 
 run:
 	$(call announce,Running Portcheck from source)
 	@go run ./cmd/portcheck $(ARGS)
+
+# Packaging is a developer-only Bash script, never invoked by the CLI/library.
+release:
+	@bash scripts/release.sh '$(VERSION)' '$(OUT)'
 
 clean:
 	$(call announce,Removing binary outputs)
