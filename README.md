@@ -121,11 +121,20 @@ curl -fsSL https://github.com/aman-void/portcheck/releases/latest/download/insta
 portcheck --version
 ```
 
-Pin a specific version instead of tracking the latest:
+Pin a specific version instead of tracking the latest. Both `v1.0.0` and
+`1.0.0` work:
 
 ```sh
 PORTCHECK_VERSION=v1.0.0 \
   curl -fsSL https://github.com/aman-void/portcheck/releases/latest/download/install.sh | sh
+```
+
+GitHub excludes prereleases from `releases/latest`, so pin the tag explicitly
+to install a release candidate:
+
+```sh
+PORTCHECK_VERSION=v1.0.0-rc.1 \
+  curl -fsSL https://github.com/aman-void/portcheck/releases/download/v1.0.0-rc.1/install.sh | sh
 ```
 
 The installer needs `curl`, `tar` (or `unzip` on Windows), and a POSIX shell; it
@@ -133,7 +142,7 @@ refuses to install anything whose checksum does not match. Two optional variable
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PORTCHECK_VERSION` | latest release tag | Install a specific version |
+| `PORTCHECK_VERSION` | latest stable release | Install a specific version; accepts `v1.0.0` or `1.0.0` |
 | `PORTCHECK_INSTALL` | `$HOME/.local/bin` | Install elsewhere, e.g. a system-wide directory |
 
 If `$HOME/.local/bin` is not on your `PATH`, the installer prints the line to

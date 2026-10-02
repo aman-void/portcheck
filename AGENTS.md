@@ -33,10 +33,11 @@
 ## Order of operations
 - Distinguish these five steps; a successful local edit proves none of the later ones:
   1. modify files
-  2. validate locally (`gofmt -l .`, `go test ./...`, `go vet ./...`, `bash -n scripts/*.sh`, `scripts/check-version.sh <version>`)
+  2. validate locally (`gofmt -l .`, `go test ./...`, `go vet ./...`, `bash -n scripts/*.sh`, `sh -n install.sh`, `scripts/check-version.sh <version>`)
   3. commit
   4. push
   5. create and push the release tag
+- Test `install.sh` against a real assembled release directory before shipping a change to it. `PORTCHECK_BASE_URL` exists for exactly this, and unit tests are not sufficient: v1.0.0-rc.1 shipped a broken installer because every earlier test passed the bare version form while the documented tag form failed. Exercise both `PORTCHECK_VERSION=v1.0.0-rc.N` and `PORTCHECK_VERSION=1.0.0-rc.N`, plus a tampered archive, against a directory laid out the way `release.sh` lays it out.
 - Never commit, tag, or push without explicit user permission.
 - Let CI be the final enforcement layer. If CI reports a version mismatch, stop the release rather than publishing inconsistent artifacts; fix the repository and release again.
 
