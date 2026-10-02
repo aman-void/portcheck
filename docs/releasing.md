@@ -110,7 +110,8 @@ created by the packaging script.
 2. Approve and commit the candidate; verify clean `git status`.
 3. With explicit approval, tag the intended commit `v1.0.0-rc.2` and push it.
 4. The tag workflow reruns native/cross-platform CI, builds archives/checksums,
-   and creates a **draft prerelease**. `docs/release-notes.md` is the published
+   and creates a **draft prerelease**. Wait for that job to finish before
+   publishing: publishing first leaves a release with no assets. `docs/release-notes.md` is the published
    notes body: the workflow substitutes `{{VERSION}}` with the tag and fails if
    any placeholder is left, so that file must stay free of editor instructions
    and hardcoded versions — it is published verbatim for both prerelease and
@@ -125,6 +126,14 @@ The workflow uses GitHub-hosted Go setup/checkout actions; these are CI tooling,
 not Go module dependencies. Publishing a draft does not satisfy native runtime
 validation or the owner's final release review. An existing draft is not silently
 replaced on rerun: investigate it rather than overwriting assets accidentally.
+
+Publishing the release is a manual step, and it can be done too early. When an
+owner publishes an empty release while the `package` job is still building, the
+tag already has a release, so the workflow attaches no assets and the published
+release has none. To recover: delete the release (keep the tag) and re-push the
+tag. The workflow now uploads assets to an existing release for that tag, so a
+re-push completes it, and fails loudly if the attached count does not match the
+built count.
 
 ## Final checklist
 
