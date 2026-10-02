@@ -38,7 +38,7 @@ func TestV03InvalidInputBeforeCheck(t *testing.T) {
 		{"--interval", "1s", "8080"}, {"--find", "--interval", "1s", "8080"},
 		{"--timeout", "1s", "8080"}, {"--watch", "--timeout", "1s", "8080"},
 		{"--wait", "--timeout"}, {"--watch", "--interval"}, {"--wait"},
-		{"--wait", "8080", "bad"}, {"--watch", "--host", "--interval", "1s", "8080"},
+		{"--wait", "8080", "bad"}, {"--watch", "--host", "-q", "8080"},
 	}
 	for _, value := range []string{"0", "0s", "-1s", "bad", "999999999999999999999s"} {
 		cases = append(cases, []string{"--wait", "--timeout", value, "8080"}, []string{"--watch", "--interval", value, "8080"})
@@ -164,6 +164,90 @@ func TestWatchChangesAndErrors(t *testing.T) {
 		}
 		if stdout.String() != want {
 			t.Fatalf("out=%q want=%q", stdout.String(), want)
+		}
+	}
+}
+
+func TestWatchBusyObservedInstantTransitionsAndReset(t *testing.T) {
+	for _, quiet := range []bool{false, true} {
+		t.Run(fmt.Sprintf("quiet=%v", quiet), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			states := []portcheck.Status{
+				portcheck.StatusFree, portcheck.StatusInUse, portcheck.StatusInUse,
+				portcheck.StatusFree, portcheck.StatusInUse, portcheck.StatusError,
+				portcheck.StatusInUse,
+			}
+			ticks := make(chan time.Time, len(states))
+			for range len(states) {
+				ticks <- time.Time{}
+			}
+			base := time.Date(2026, 10, 2, 8, 14, 0, 0, time.UTC)
+			// Observation and emission are separately controlled. The long gaps
+			// between transitions must not be included in the new busy period.
+			offsets := []time.Duration{0, 10 * time.Second, 12900 * time.Millisecond, 100 * time.Second,
+				200 * time.Second, 201900 * time.Millisecond, 300 * time.Second,
+				400 * time.Second, 400700 * time.Millisecond}
+			clockCalls, checks := 0, 0
+			var out, diag bytes.Buffer
+			code := runPolling(ctx, options{watch: true, quiet: quiet, host: "127.0.0.1", ports: []int{8080}}, &out, &diag,
+				func(context.Context, string, int) portcheck.Result {
+					if checks == len(states) {
+						cancel()
+						return portcheck.Result{Port: 8080, Status: portcheck.StatusError, Err: context.Canceled}
+					}
+					result := portcheck.Result{Port: 8080, Status: states[checks]}
+					if result.Status == portcheck.StatusError {
+						result.Err = errors.New("controlled failure")
+					}
+					checks++
+					return result
+				}, ticks, func() time.Time {
+					if clockCalls == len(offsets) {
+						t.Fatal("unexpected clock call")
+					}
+					instant := base.Add(offsets[clockCalls])
+					clockCalls++
+					return instant
+				})
+			want := "2026-10-02 08:14:00  127.0.0.1  8080 FREE\n" +
+				"2026-10-02 08:14:12  127.0.0.1  8080 IN USE  observed since 08:14:10\n" +
+				"2026-10-02 08:15:40  127.0.0.1  8080 FREE\n" +
+				"2026-10-02 08:17:21  127.0.0.1  8080 IN USE  observed since 08:17:20\n" +
+				"2026-10-02 08:19:00  127.0.0.1  8080 ERROR\n" +
+				"2026-10-02 08:20:40  127.0.0.1  8080 IN USE  observed since 08:20:40\n"
+			wantClockCalls := len(offsets)
+			if quiet {
+				want = "FREE\nIN_USE\nFREE\nIN_USE\nERROR\nIN_USE\n"
+				wantClockCalls = 6
+			}
+			if code != 3 || checks != len(states) || out.String() != want || clockCalls != wantClockCalls || diag.String() != "error: failed to check 127.0.0.1 port 8080: controlled failure\n" {
+				t.Fatalf("code=%d checks=%d clock=%d out=%q diag=%q", code, checks, clockCalls, &out, &diag)
+			}
+		})
+	}
+}
+
+func TestBusyMarkerDoesNotChangeOneShotOutput(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"8080"}, "PORT    STATUS\n8080    IN USE\n"},
+		{[]string{"--json", "8080"}, "[{\"port\":8080,\"status\":\"in_use\"}]\n"},
+		{[]string{"--quiet", "8080"}, "IN_USE\n"},
+		{[]string{"--wait-in-use", "--quiet", "8080"}, "IN_USE\n"},
+	} {
+		var out, diag bytes.Buffer
+		code := runContext(context.Background(), tc.args, &out, &diag, func(context.Context, string, int) portcheck.Result {
+			return portcheck.Result{Port: 8080, Status: portcheck.StatusInUse}
+		})
+		wantCode := 1
+		if tc.args[0] == "--wait-in-use" {
+			wantCode = 0
+		}
+		if code != wantCode || out.String() != tc.want || diag.Len() != 0 {
+			t.Fatalf("%v: code=%d out=%q diag=%q", tc.args, code, &out, &diag)
 		}
 	}
 }
@@ -509,7 +593,7 @@ func TestWaitChecksCancellationAgainBeforeOutput(t *testing.T) {
 }
 
 func TestHostFlagValueDiagnostics(t *testing.T) {
-	for _, flag := range []string{"-q", "-h", "-v", "--quiet", "--unknown", "--"} {
+	for _, flag := range []string{"-q", "-h", "-v", "--unknown", "--"} {
 		var stdout, stderr bytes.Buffer
 		code := runContext(context.Background(), []string{"--host", flag, "8080"}, &stdout, &stderr, func(context.Context, string, int) portcheck.Result {
 			t.Fatal("missing host performed a check")

@@ -33,8 +33,8 @@ func TestInvalidInputDoesNotCheck(t *testing.T) {
 		{"3000", "abc", "8080"}, {"--foobar", "8080"}, {"8080", "--foobar"},
 		{"--help", "--foobar"}, {"3010-3000"}, {"--json", "--quiet", "8080"},
 		{"--find", "3000", "4000"}, {"--host", "", "8080"}, {"--watch", "--wait", "8080"},
-		{"--wait", "--find", "8080"}, {"--process=true", "8080"}, {"--connect", "localhost:8080"},
-		{"doctor", "8080"}, {"--", "-q"},
+		{"--wait", "--find", "8080"}, {"--process=true", "8080"}, {"--connect", "localhost"},
+		{"doctor", "8080", "8081"}, {"--", "-q"},
 	}
 	for _, args := range cases {
 		t.Run(fmt.Sprint(args), func(t *testing.T) {
@@ -59,8 +59,8 @@ func TestHelpAndVersion(t *testing.T) {
 		{[]string{"--help"}, help},
 		{[]string{"--help", "abc"}, help},
 		{[]string{"--help", "--version"}, help},
-		{[]string{"-v"}, "portcheck version 0.4.0\n"},
-		{[]string{"--version"}, "portcheck version 0.4.0\n"},
+		{[]string{"-v"}, "portcheck version 0.5.0\n"},
+		{[]string{"--version"}, "portcheck version 0.5.0\n"},
 	} {
 		var stdout, stderr bytes.Buffer
 		code := run(tc.args, &stdout, &stderr, func(int) portcheck.Result {

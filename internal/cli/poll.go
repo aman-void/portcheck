@@ -33,6 +33,7 @@ func runPollingWithInspector(ctx context.Context, opts options, stdout, stderr i
 		ticks = ticker.C
 	}
 	previous := make(map[int]portcheck.Result)
+	busySince := make(map[int]time.Time)
 	previousProcesses := make(map[int]processDetail)
 	exit := 0
 	for {
@@ -62,6 +63,15 @@ func runPollingWithInspector(ctx context.Context, opts options, stdout, stderr i
 			if canceled {
 				return pollingCanceled(ctx, opts, stderr, exit)
 			}
+			enteredBusy := seen && old.Status != portcheck.StatusInUse && result.Status == portcheck.StatusInUse
+			if opts.watch && !opts.quiet {
+				if result.Status != portcheck.StatusInUse {
+					delete(busySince, port)
+				} else if !seen || old.Status != portcheck.StatusInUse {
+					// This is the first busy observation, not the actual bind time.
+					busySince[port] = now()
+				}
+			}
 			if opts.watch && opts.process {
 				if result.Status == portcheck.StatusInUse {
 					details[port] = inspectDetail(ctx, opts.host, port, inspect)
@@ -83,7 +93,13 @@ func runPollingWithInspector(ctx context.Context, opts options, stdout, stderr i
 				allMatch = false
 			}
 			if opts.watch && changed {
-				if err := writeWatchWithProcesses(stdout, opts, result, now(), details[port]); err != nil {
+				timestamp := now()
+				var observedSince *time.Time
+				if enteredBusy && !opts.quiet {
+					instant := busySince[port]
+					observedSince = &instant
+				}
+				if err := writeWatchWithProcesses(stdout, opts, result, timestamp, details[port], observedSince); err != nil {
 					fmt.Fprintf(stderr, "error: write output: %v\n", err)
 					return 3
 				}
@@ -177,10 +193,10 @@ func errorText(err error) string {
 }
 
 func writeWatch(w io.Writer, opts options, result portcheck.Result, timestamp time.Time) error {
-	return writeWatchWithProcesses(w, opts, result, timestamp, processDetail{})
+	return writeWatchWithProcesses(w, opts, result, timestamp, processDetail{}, nil)
 }
 
-func writeWatchWithProcesses(w io.Writer, opts options, result portcheck.Result, timestamp time.Time, detail processDetail) error {
+func writeWatchWithProcesses(w io.Writer, opts options, result portcheck.Result, timestamp time.Time, detail processDetail, observedSince *time.Time) error {
 	if opts.quiet {
 		return writeResults(w, []portcheck.Result{result}, true)
 	}
@@ -191,7 +207,11 @@ func writeWatchWithProcesses(w io.Writer, opts options, result portcheck.Result,
 	if result.Status == portcheck.StatusInUse {
 		status = "IN USE"
 	}
-	_, err := fmt.Fprintf(w, "%s  %s  %d %s\n", timestamp.Format("2006-01-02 15:04:05"), opts.host, result.Port, status)
+	busyMarker := ""
+	if result.Status == portcheck.StatusInUse && observedSince != nil {
+		busyMarker = "  observed since " + observedSince.Format("15:04:05")
+	}
+	_, err := fmt.Fprintf(w, "%s  %s  %d %s%s\n", timestamp.Format("2006-01-02 15:04:05"), opts.host, result.Port, status, busyMarker)
 	if err != nil {
 		return err
 	}

@@ -171,6 +171,62 @@ func TestProcessWatchChanges(t *testing.T) {
 	}
 }
 
+func TestWatchBusyMarkerNotRepeatedForOwnershipChanges(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ticks := make(chan time.Time, 3)
+	for range 3 {
+		ticks <- time.Time{}
+	}
+	cycle := 0
+	base := time.Date(2026, 10, 2, 8, 14, 0, 0, time.UTC)
+	var out, diag bytes.Buffer
+	code := runPollingWithInspector(ctx, options{watch: true, process: true, host: "127.0.0.1", ports: []int{8080}}, &out, &diag,
+		func(context.Context, string, int) portcheck.Result {
+			cycle++
+			if cycle == 4 {
+				cancel()
+			}
+			status := portcheck.StatusInUse
+			if cycle == 1 {
+				status = portcheck.StatusFree
+			}
+			return portcheck.Result{Port: 8080, Status: status}
+		}, ticks, func() time.Time { return base.Add(time.Duration(cycle) * time.Second) },
+		func(context.Context, string, int) ([]process.Info, error) {
+			return []process.Info{{PID: cycle}}, nil
+		})
+	want := "2026-10-02 08:14:01  127.0.0.1  8080 FREE\n" +
+		"2026-10-02 08:14:02  127.0.0.1  8080 IN USE  observed since 08:14:02\n        PID: 2\n" +
+		"2026-10-02 08:14:03  127.0.0.1  8080 IN USE\n        PID: 3\n"
+	if code != 0 || out.String() != want || diag.Len() != 0 {
+		t.Fatalf("code=%d out=%q diag=%q", code, &out, &diag)
+	}
+}
+
+func TestBusyMarkerDoesNotChangeDoctorOutput(t *testing.T) {
+	for _, asJSON := range []bool{false, true} {
+		args := []string{"doctor", "8080"}
+		want := "Portcheck Doctor\n\nEndpoint\n  Host: 127.0.0.1\n  Port: 8080\n  Protocol: TCP\n\nLocal Port\n  Status: IN USE\n\nProcess\n        PID: 10  NAME: api\n\nConnectivity\n  Status: REACHABLE\n  Latency: 1.25ms\n"
+		if asJSON {
+			args = append(args, "--json")
+			want = "[{\"endpoint\":{\"host\":\"127.0.0.1\",\"port\":8080,\"protocol\":\"tcp\"},\"local\":{\"status\":\"in_use\"},\"processes\":[{\"pid\":10,\"name\":\"api\"}],\"connectivity\":{\"address\":\"127.0.0.1:8080\",\"status\":\"reachable\",\"duration_ms\":1.25}}]\n"
+		}
+		var out, diag bytes.Buffer
+		code := runContextWithConnector(context.Background(), args, &out, &diag,
+			func(context.Context, string, int) portcheck.Result {
+				return portcheck.Result{Port: 8080, Status: portcheck.StatusInUse}
+			}, func(context.Context, string, int) ([]process.Info, error) {
+				return []process.Info{{PID: 10, Name: "api"}}, nil
+			}, func(_ context.Context, address string, _ time.Duration) (portcheck.ConnectivityResult, error) {
+				return portcheck.ConnectivityResult{Address: address, Status: portcheck.ConnectivityReachable, Duration: 1250 * time.Microsecond}, nil
+			})
+		if code != 0 || out.String() != want || diag.Len() != 0 {
+			t.Fatalf("json=%v code=%d out=%q diag=%q", asJSON, code, &out, &diag)
+		}
+	}
+}
+
 func TestProcessWaitInspectsOnlyFinalCycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

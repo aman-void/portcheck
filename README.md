@@ -1,11 +1,12 @@
 # Portcheck
 
-A tiny Go CLI that answers one question: **can I bind this local TCP port?**
+A tiny Go CLI for local TCP availability and explicit TCP connectivity tests.
 
 Check ports and ranges, find an available port, watch state changes, or wait
 for a desired state. Optionally identify visible Linux listening processes.
-Consume results through JSON and a small Go API.
-**v0.4.0** uses only Go's standard library, defaults to IPv4 loopback
+Test TCP connectivity with `--connect`, or combine factual local observations
+with `doctor`. Consume results through JSON and a small Go API.
+**v0.5.0** uses only Go's standard library, defaults to IPv4 loopback
 (`127.0.0.1`), and supports explicit local IPv4/IPv6 addresses and hostnames.
 
 ```text
@@ -28,7 +29,7 @@ make build
 ./bin/portcheck --version
 ```
 
-The version command prints `portcheck version 0.4.0`. Port statuses depend
+The version command prints `portcheck version 0.5.0`. Port statuses depend
 on what is running on your machine; the example output is illustrative.
 
 **Without Make:**
@@ -94,11 +95,13 @@ IN_USE
 | `--find` | Find the first free port, starting at one supplied port |
 | `--host <host>` | Select the local bind address (default `127.0.0.1`) |
 | `--process` | Identify visible local listening processes (Linux only) |
+| `--connect <host:port>` | Test TCP establishment; no application payload |
+| `doctor <port>` | Combine local bind, process inspection, and connectivity |
 | `--watch` | Emit initial states and subsequent changes until interrupted |
 | `--wait` | Wait until all requested ports are free |
 | `--wait-in-use` | Wait until all requested ports are occupied |
 | `--interval <duration>` | Watch/wait polling interval (default `1s`, minimum `100ms`) |
-| `--timeout <duration>` | Positive wait timeout (default: no timeout) |
+| `--timeout <duration>` | Positive timeout (wait: unbounded; connect dial/whole doctor run: `5s`) |
 | `--` | End option parsing |
 
 ### Check port ranges
@@ -187,6 +190,12 @@ or an ASCII DNS hostname. Empty values, embedded ports, malformed IPs, and
 invalid hostname syntax are rejected with exit `2`, without binding or DNS
 lookups. Internationalized names must use their ASCII/punycode form.
 
+When `--host` is followed by a long flag, its value is treated as omitted and
+the default `127.0.0.1` is used: `--host --quiet 8080` and
+`--host --json 8080` both check port 8080 on the default host. Short aliases are
+not covered — `--host -q 8080` remains a missing-host error. Supply a value with
+`--host 127.0.0.1 --json 8080` when an explicit host is intended.
+
 For a hostname, Go resolves it during binding and selects **one** address;
 Portcheck does not check all resolved addresses or silently fall back to
 loopback. `localhost` is not guaranteed to select IPv4; use a literal IP when
@@ -216,6 +225,12 @@ Watch immediately emits each unique port's initial state, then only changes:
 
 Human events contain a local-time timestamp (`YYYY-MM-DD HH:MM:SS`), requested
 host, port, and status. Each port keeps its own previous state, in input order.
+On a transition from `FREE` or `ERROR` to `IN USE`, human watch output appends
+`observed since HH:MM:SS`, identifying when that busy state was first observed,
+**not the actual time the port became busy**. The marker is not
+repeated for unchanged polls or process-only changes. `FREE` and `ERROR` reset
+the observation. An initially occupied port has no known transition and retains
+its existing initial output. Quiet watch and all other modes are unchanged.
 An error's appearance, changed diagnostic, or recovery is also a state change.
 Watch continues after check errors; unchanged errors do not spam stderr.
 Diagnostics stay on stderr and events on stdout. Output-write failures stop
@@ -267,9 +282,10 @@ Long cycles can take longer than the requested interval. Transitions between
 observations may be missed; wait-in-use indicates bind conflict, not service
 readiness or application health.
 
-`--find`, `--watch`, `--wait`, and `--wait-in-use` are mutually exclusive.
-`--interval` requires watch or either wait mode. `--timeout` requires a wait
-mode. `--quiet --json` remains invalid. These conflicts fail before networking.
+`--find`, `--watch`, `--wait`, `--wait-in-use`, `--connect`, and `doctor` are
+mutually exclusive. `--interval` requires watch or either wait mode.
+`--timeout` requires wait, connect, or doctor. `--quiet --json` remains invalid.
+These conflicts fail before networking.
 
 ### Inspect listening processes
 
@@ -328,7 +344,7 @@ find's numeric/JSON output. `--watch --json` remains invalid.
   It does not run `ss`, `lsof`, or any other command. Process names and paths are
   sanitized for terminal output; JSON preserves the original escaped strings.
 - **macOS, Windows, other platforms:** process inspection is explicitly
-  unsupported in v0.4. An occupied `--process` result reports that limitation,
+  unsupported in v0.5. An occupied `--process` result reports that limitation,
   while normal checks and free-port checks still work. Cross-compilation does
   not establish native runtime support.
 - Permissions, `hidepid`, containers, and PID/network namespaces can hide owners.
@@ -351,8 +367,129 @@ find's numeric/JSON output. `--watch --json` remains invalid.
 - Scanning `/proc` costs more than binding; large occupied ranges and watch cycles
   may take longer than the requested interval. Inspection remains sequential.
 
-The public Go API and `portcheck.Result` are unchanged. Process inspection and
-the combined CLI records are internal in v0.4; no new public process API is exposed.
+The existing bind API and `portcheck.Result` are unchanged. Process inspection and
+the combined CLI records remain internal; no public process API is exposed.
+
+### Test TCP connectivity
+
+```sh
+./bin/portcheck --connect localhost:8080
+./bin/portcheck --connect 127.0.0.1:8080 --quiet
+./bin/portcheck --connect '[::1]:8080' --timeout 2s --json
+```
+
+`--connect` is a **dial**, not a local availability check. It accepts exactly
+one endpoint: an ASCII DNS hostname or IP address and a decimal port in
+`1-65535`. IPv6 endpoints require brackets; zones are accepted, e.g.
+`[fe80::1%eth0]:8080`. Empty hosts, service names, URLs, ranges, embedded
+whitespace, and malformed endpoints are rejected before any networking.
+
+Go's `net.Dialer.DialContext` handles hostname resolution and IPv4/IPv6.
+There is one user-directed dial operation, with no Portcheck retries or scanning;
+Go may try multiple resolved addresses as part of its normal dialing behavior.
+The timeout covers resolution and TCP establishment, defaults to **5 seconds**,
+and must be positive. An earlier caller deadline wins. Successful connections
+are closed immediately, with **no application data sent**. Normal bind checks
+do not dial. Connectivity does not inspect local or remote processes.
+
+| Status | Observation | Exit |
+| --- | --- | --- |
+| `REACHABLE` | TCP establishment succeeded and connection cleanup succeeded | `0` |
+| `REFUSED` | The connection attempt was explicitly refused | `1` |
+| `TIMEOUT` | The attempt timed out or its context deadline expired | `1` |
+| `ERROR` | Other failure, such as DNS, network, cancellation, or cleanup error | `3` |
+
+Human output contains address, status, and elapsed dial time in milliseconds.
+Quiet output is exactly one `REACHABLE`, `REFUSED`, `TIMEOUT`, or `ERROR` token.
+Diagnostics go to stderr. Ctrl+C/SIGTERM cancels the active dial and produces
+`ERROR` with exit `3`; a completed dial is not reclassified by a later signal.
+These new-mode cancellation semantics do not change existing watch/wait behavior.
+
+Connectivity JSON is a **single-element array**, preserving the repository's
+array convention (not an object or NDJSON):
+
+```json
+[{"address":"localhost:8080","status":"reachable","duration_ms":0.42}]
+```
+
+Fields are `address` (the supplied string), `status` (lowercase), and
+`duration_ms` (a nonnegative fractional number). Failures add `error` with
+human-readable diagnostic text, including refusal and timeout. Dial duration
+includes resolution but not validation or cleanup; a pre-canceled operation
+has duration `0`. Do not match OS-specific error wording in scripts.
+
+`--connect` rejects positional ports, repeated `--connect`, `--host`,
+`--process`, `--interval`, and other operation modes. `--quiet --json` remains
+invalid. There is no connectivity watch/wait mode.
+
+Known flags may intervene before the endpoint, including
+`--connect --quiet localhost:8080`, `--connect --json localhost:8080`, and
+`--connect --timeout 1s localhost:8080`. The next non-option endpoint supplies
+the deferred value; timeout and interval values still immediately follow their
+own flags. Unknown options and missing endpoints remain errors.
+
+### Diagnose a local endpoint
+
+```sh
+./bin/portcheck doctor 8080
+./bin/portcheck doctor --host ::1 8080 --timeout 2s
+./bin/portcheck doctor 8080 --json
+```
+
+Doctor accepts exactly **one single port**, not a range. It sequentially:
+
+1. Checks local binding on `--host` (default `127.0.0.1`).
+2. Inspects visible processes automatically, only if the bind result is `IN USE`.
+3. Tests TCP connectivity to that same host and port.
+
+The report separates endpoint (`host`, `port`, TCP), local bind status,
+visible owners or unavailable inspection, and connectivity status/latency.
+`IN USE` plus `REACHABLE`, or `FREE` plus `REFUSED`, are both valid.
+Process failures are warnings and never overwrite either network observation.
+Bind errors are reported separately; doctor still attempts the requested dial.
+Free ports are not inspected, and a successful bind does not prove that no
+process exists elsewhere. Observations may change between stages.
+
+Doctor uses **one finite timeout budget for the complete operation**: local
+binding (including resolution), process inspection (including resolution), and
+dialing. The default is `5s`; `--timeout` overrides it. The connector uses the
+remaining budget rather than getting an extra timeout after inspection. On
+expiry, stderr explicitly reports a doctor timeout; completed observations
+remain intact, and unfinished stages report their own deadline errors. As with
+existing cancellation support, checks stop between OS calls; Go cannot promise
+to interrupt every synchronous filesystem/socket call instantaneously.
+Doctor uses the existing Linux-only inspector and its permission,
+namespace, scoped-address, and dual-stack limitations. `--process` is accepted
+but redundant. Quiet, find, watch, wait, wait-in-use, connect, and interval
+combinations are rejected. `--host` retains local bind semantics; a remote-only
+host can yield a local bind error even if the dial succeeds. Wildcard hosts
+retain OS-defined bind/dial behavior; prefer a literal loopback address for
+an unambiguous local connectivity target.
+
+Doctor exits `0` for reachable connectivity, `1` for refusal/timeout, and `3`
+for any local bind or connectivity system error (including cancellation).
+Process lookup warnings alone do not change the exit. Invalid input exits `2`.
+Human reports include errors in their corresponding sections and diagnostics
+on stderr. JSON stdout is a single-element array:
+
+```json
+[{
+  "endpoint":{"host":"127.0.0.1","port":8080,"protocol":"tcp"},
+  "local":{"status":"in_use"},
+  "processes":[{"pid":18242,"name":"api","executable":"/usr/local/bin/api"}],
+  "connectivity":{"address":"127.0.0.1:8080","status":"reachable","duration_ms":0.42}
+}]
+```
+
+`local.status` uses `free`, `in_use`, or `error`; `local.error` appears on bind
+failure. `processes` is an optional PID-sorted array with the existing process
+schema, supporting multiple owners. A lookup failure adds `process_error`;
+free/error local rows omit process fields. `connectivity` uses the exact fields
+described above. Optional errors and absent owners are omitted, not `null`.
+
+TCP establishment does **not** prove application health, HTTP health, TLS
+correctness, firewall configuration, or packet routing. Portcheck does not
+test UDP, identify remote processes, send protocol probes, or control services.
 
 ### Try it against a real listener
 
@@ -423,8 +560,8 @@ before your application starts.
 
 | Code | Meaning |
 | --- | --- |
-| 0 | All ports free, find succeeds, wait condition satisfied, clean watch stop, or help/version |
-| 1 | Ports in use, find exhausted, wait timeout/cancellation, or one-shot cancellation between checks |
+| 0 | All ports free, find succeeds, wait satisfied, clean watch stop, connect/doctor reachable, or help/version |
+| 1 | Ports in use, find exhausted, wait timeout/cancellation, one-shot cancellation between checks, or connect/doctor refused/timeout |
 | 2 | Invalid CLI input, including missing ports |
 | 3 | System error, including failed output writes |
 
@@ -450,7 +587,8 @@ under a normal user. That is not evidence that those ports are occupied;
 Portcheck does not request elevated privileges.
 
 This version is TCP-only. It does not inspect every interface, check UDP,
-test remote connectivity, control processes, or scan networks.
+control processes, or scan networks. Remote connectivity is tested only when
+explicitly requested with `--connect` (or the host selected for doctor).
 The checker uses portable Go networking APIs. Linux is runtime-tested;
 Linux, macOS, and Windows compile for amd64 and arm64. Successful compilation
 alone is not a claim of functional support on an untested OS.
@@ -459,7 +597,7 @@ alone is not a claim of functional support on an untested OS.
 
 The public package lives at the module root:
 `github.com/aman-void/portcheck`. Once the version is published, add it to
-your Go project with `go get github.com/aman-void/portcheck@v0.4.0`.
+your Go project with `go get github.com/aman-void/portcheck@v0.5.0`.
 For unpublished local changes, use a local `replace` directive pointing to
 this checkout instead of expecting the remote version to exist.
 
@@ -533,6 +671,33 @@ func main() {
 
 - There is no public range parser, find, watch, or wait API; those are CLI concerns.
 
+#### Connectivity API
+
+```go
+result, err := portcheck.Connect(ctx, "127.0.0.1:8080", portcheck.DefaultConnectTimeout)
+switch result.Status {
+case portcheck.ConnectivityReachable:
+    // TCP establishment succeeded; no application health claim.
+case portcheck.ConnectivityRefused, portcheck.ConnectivityTimeout:
+    // Expected negative observations; err retains diagnostic details.
+case portcheck.ConnectivityError:
+    // Inspect err with errors.Is/errors.As.
+}
+_ = err
+```
+
+`Connect(ctx, address, timeout) (ConnectivityResult, error)` takes a non-nil
+context and a positive explicit timeout. `DefaultConnectTimeout` is `5s`.
+The result has `Address`, `Status`, `Duration`, and `Err`; every unsuccessful
+operation returns the same error in `Err` and the error return, **including
+refusal and timeout**. This differs from a normal occupied bind result, which
+has no library error. Wrapped causes remain inspectable; classification uses
+typed errors, not text. `ValidateEndpoint(address)` validates syntax without
+DNS/networking; invalid endpoints wrap `ErrInvalidEndpoint` (and invalid
+numeric port bounds also wrap `ErrInvalidPort`). Nonpositive timeouts wrap
+`ErrInvalidTimeout`. Cancellation yields `ConnectivityError`; deadlines yield
+`ConnectivityTimeout`. There is no public doctor or process API.
+
 ## Development
 
 Run `make` or `make help` for the command menu.
@@ -572,6 +737,7 @@ gofmt -l .
 go test ./...
 go vet ./...
 go build ./cmd/portcheck
+go build ./...
 go list -m all
 ```
 
@@ -586,6 +752,8 @@ go test . -run '^TestCheckHostRealListeners$' -count=1
 go test ./internal/cli -run '^TestWaitReal' -count=1
 go test ./internal/process -count=1
 go test ./internal/cli -run '^TestProcess' -count=1
+go test . -run '^TestConnect' -count=1
+go test ./internal/cli -run '^Test(Connect|Doctor)' -count=1
 ```
 
 Tests allocate local TCP listeners dynamically; they need loopback socket
@@ -604,6 +772,9 @@ find, watch/wait orchestration, output, and exit-code selection. The CLI calls t
 which owns library validation and batch semantics; `internal/checker` owns
 binding and error classification. `internal/process` independently provides
 optional platform-specific ownership inspection, composed by the CLI.
+The root `connectivity.go` owns endpoint validation, dialing, classification,
+and structured results independently of bind checking. CLI doctor orchestration
+composes the public bind/connect APIs and existing process inspector.
 The library never imports the CLI or process inspector.
 The checker remains stateless. Tests use internal function parameters to control failures and timing,
 without mutable global hooks. Plans live under `plans/` and describe future

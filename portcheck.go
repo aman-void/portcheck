@@ -1,4 +1,5 @@
-// Package portcheck checks local TCP binding availability, defaulting to 127.0.0.1.
+// Package portcheck checks local TCP binding availability, defaulting to 127.0.0.1,
+// and separately tests user-selected TCP connectivity with Connect.
 // A free result is an observation, not a reservation of the port.
 package portcheck
 
