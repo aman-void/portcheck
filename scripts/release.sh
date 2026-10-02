@@ -72,4 +72,23 @@ cp "$install_sh" "$out/$install_sh"
 chmod 0755 "$out/$install_sh"
 
 (cd "$out" && sha256sum portcheck_*.tar.gz portcheck_*.zip "$install_sh" > SHA256SUMS)
+
+# Measured sizes, so documentation claims can be checked against real artifacts
+# rather than estimated. "binary" is the stripped executable; "archive" is the
+# compressed file a user downloads, which also carries LICENSE and BUILDINFO.txt
+# and so is slightly larger than the executable alone.
+printf '\n%-22s %12s %12s\n' "TARGET" "BINARY" "ARCHIVE"
+printf '%-22s %12s %12s\n' "----------------------" "------------" "------------"
+for os in linux darwin windows; do
+  for arch in amd64 arm64; do
+    name="portcheck_${version}_${os}_${arch}"
+    if [[ $os == windows ]]; then archive="$name.zip"; else archive="$name.tar.gz"; fi
+    bin_bytes=$(stat -c%s "$stage/$name/portcheck.exe" 2>/dev/null \
+      || stat -c%s "$stage/$name/portcheck")
+    arc_bytes=$(stat -c%s "$out/$archive")
+    printf '%-22s %12s %12s\n' "$os/$arch" "$bin_bytes" "$arc_bytes"
+  done
+done
+printf '\nSizes in bytes. Compressed archives include LICENSE and BUILDINFO.txt.\n'
+
 echo "Release artifacts: $out"
