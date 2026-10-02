@@ -48,10 +48,30 @@ make release VERSION=1.0.0-rc.1 OUT=dist/rc.1
 (cd dist/rc.1 && sha256sum -c SHA256SUMS)
 ```
 
+That produces six platform archives, `install.sh`, and a seven-line
+`SHA256SUMS`. Confirm the installer resolves against the finished directory
+before tagging, since that URL is what users will pipe to their shell:
+
+```sh
+(cd dist/rc.1 && python3 -m http.server 8000 &)   # or: python3 -m http.server
+PORTCHECK_VERSION=1.0.0-rc.1 PORTCHECK_BASE_URL=http://127.0.0.1:8000 \
+  PORTCHECK_INSTALL=$(mktemp -d) sh install.sh
+```
+
+`PORTCHECK_BASE_URL` exists for mirrors, air-gapped installs, and this check.
+
 The output directory must not exist. The script validates stable `1.x.y` and
 `1.x.y-rc.N` versions, refuses a dirty checkout, and builds Linux/macOS/Windows
 amd64/arm64 with `CGO_ENABLED=0`, `-trimpath`, `-buildvcs=false`, stripping symbols
 and injecting the version with `-X .../internal/cli.version=...`.
+
+It also copies the repository's `install.sh` to the output directory as a
+top-level release asset and lists it in `SHA256SUMS`. The installer is one file
+for all six targets, which is what makes
+`releases/latest/download/install.sh` a stable URL. `release.sh` checks it
+exists and passes `sh -n` before packaging, so an installer broken for POSIX
+sh fails the build rather than the user's machine. Edit `install.sh`, never a
+copy in the output directory.
 `go install module@version` uses Go module build information instead of linker
 flags; explicit linker injection takes precedence. Development is `1.0.0-dev`.
 
