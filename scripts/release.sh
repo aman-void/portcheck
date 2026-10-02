@@ -12,12 +12,17 @@ if [[ ! $version =~ ^1\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$ || 
 fi
 
 cd "$(dirname "$0")/.."
-for tool in go git tar gzip zip touch sha256sum; do
+for tool in go git sh tar gzip zip touch sha256sum; do
   command -v "$tool" >/dev/null || { echo "missing packaging tool: $tool" >&2; exit 1; }
 done
 # GNU tar supplies deterministic ordering/ownership/timestamps. Packaging runs
 # on Linux; the resulting archives are for all six targets.
 tar --version | grep -q 'GNU tar' || { echo 'packaging requires GNU tar' >&2; exit 1; }
+# Preflight the installer before writing any output, so a packaging failure
+# never leaves a directory that looks publishable but has no SHA256SUMS.
+install_sh=install.sh
+[[ -f $install_sh ]] || { echo "missing installer: $install_sh" >&2; exit 1; }
+sh -n "$install_sh" || { echo 'install.sh failed sh -n' >&2; exit 1; }
 dirty=false
 if [[ -n $(git status --porcelain) ]]; then
   dirty=true
@@ -59,5 +64,12 @@ for os in linux darwin windows; do
     fi
   done
 done
-(cd "$out" && sha256sum portcheck_*.tar.gz portcheck_*.zip > SHA256SUMS)
+# Ship the installer as a top-level asset, not inside the per-platform archives.
+# One file serves every platform, which is what makes
+# releases/latest/download/install.sh a stable URL. POSIX sh only: it runs on
+# machines that have curl and tar but no Bash. Preflighted above.
+cp "$install_sh" "$out/$install_sh"
+chmod 0755 "$out/$install_sh"
+
+(cd "$out" && sha256sum portcheck_*.tar.gz portcheck_*.zip "$install_sh" > SHA256SUMS)
 echo "Release artifacts: $out"
