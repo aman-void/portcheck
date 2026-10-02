@@ -2,7 +2,7 @@
 
 The master is `plans/plan.md`; v1.0 scope is `plans/v1.0.md`. Final release and
 commit/tag/publication require owner approval. The first candidate is
-`v1.0.0-rc.1`. A local candidate is not a released v1.0.0.
+`v1.0.0-rc.2`. A local candidate is not a released v1.0.0.
 
 ## Validate a candidate
 
@@ -44,8 +44,8 @@ sha256sum, and ordinary core utilities. These are developer-only tools, not
 dependencies of the Portcheck executable or library. No application shells out.
 
 ```sh
-make release VERSION=1.0.0-rc.1 OUT=dist/rc.1
-(cd dist/rc.1 && sha256sum -c SHA256SUMS)
+make release VERSION=1.0.0-rc.2 OUT=dist/rc.2
+(cd dist/rc.2 && sha256sum -c SHA256SUMS)
 ```
 
 That produces six platform archives, `install.sh`, and a seven-line
@@ -53,8 +53,8 @@ That produces six platform archives, `install.sh`, and a seven-line
 before tagging, since that URL is what users will pipe to their shell:
 
 ```sh
-(cd dist/rc.1 && python3 -m http.server 8000 &)   # or: python3 -m http.server
-PORTCHECK_VERSION=1.0.0-rc.1 PORTCHECK_BASE_URL=http://127.0.0.1:8000 \
+(cd dist/rc.2 && python3 -m http.server 8000 &)   # or: python3 -m http.server
+PORTCHECK_VERSION=1.0.0-rc.2 PORTCHECK_BASE_URL=http://127.0.0.1:8000 \
   PORTCHECK_INSTALL=$(mktemp -d) sh install.sh
 ```
 
@@ -78,7 +78,7 @@ flags; explicit linker injection takes precedence. Development is `1.0.0-dev`.
 Each archive contains exactly one directory:
 
 ```text
-portcheck_1.0.0-rc.1_<os>_<arch>/
+portcheck_1.0.0-rc.2_<os>_<arch>/
   portcheck[.exe]
   LICENSE
   BUILDINFO.txt
@@ -96,7 +96,7 @@ or a separate authenticity guarantee.
 For testing tooling **before** committing intentionally changed files, use:
 
 ```sh
-ALLOW_DIRTY=1 make release VERSION=1.0.0-rc.1 OUT=dist/local-rc.1
+ALLOW_DIRTY=1 make release VERSION=1.0.0-rc.2 OUT=dist/local-rc.2
 ```
 
 Those archives record `dirty=true`, warn, and **must not be published**. Rebuild
@@ -108,7 +108,7 @@ created by the packaging script.
 1. Review [contracts](contracts.md), [platform evidence](platforms.md), security/
    performance findings, README/help/Go docs, and release notes.
 2. Approve and commit the candidate; verify clean `git status`.
-3. With explicit approval, tag the intended commit `v1.0.0-rc.1` and push it.
+3. With explicit approval, tag the intended commit `v1.0.0-rc.2` and push it.
 4. The tag workflow reruns native/cross-platform CI, builds archives/checksums,
    and creates a **draft prerelease**. `docs/release-notes.md` is the published
    notes body: the workflow substitutes `{{VERSION}}` with the tag and fails if

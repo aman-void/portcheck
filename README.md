@@ -14,7 +14,7 @@ curl -fsSL https://github.com/aman-void/portcheck/releases/latest/download/insta
 It uses only Go's standard library, defaults to IPv4 loopback
 (`127.0.0.1`), and supports explicit local IPv4/IPv6 addresses and hostnames.
 
-The current release candidate is **`v1.0.0-rc.1`**. Stable `v1.0.0` is not
+The current release candidate is **`v1.0.0-rc.2`**. Stable `v1.0.0` is not
 released yet. Untagged source builds report `1.0.0-dev`; a build from a tagged
 commit reports that tag, and release builds inject their version. Final `v1.0.0`
 publication is pending candidate validation and owner review.
@@ -133,8 +133,8 @@ GitHub excludes prereleases from `releases/latest`, so pin the tag explicitly
 to install a release candidate:
 
 ```sh
-PORTCHECK_VERSION=v1.0.0-rc.1 \
-  curl -fsSL https://github.com/aman-void/portcheck/releases/download/v1.0.0-rc.1/install.sh | sh
+PORTCHECK_VERSION=v1.0.0-rc.2 \
+  curl -fsSL https://github.com/aman-void/portcheck/releases/download/v1.0.0-rc.2/install.sh | sh
 ```
 
 The installer needs `curl`, `tar` (or `unzip` on Windows), and a POSIX shell; it
@@ -839,8 +839,8 @@ Run `make` or `make help` for the command menu.
 | `make build` | Build `bin/portcheck` |
 | `make run ARGS="--help"` | Run the CLI from source |
 | `make clean` | Remove only known binary outputs |
-| `make build VERSION=1.0.0-rc.1` | Inject a candidate version into `bin/portcheck` |
-| `make release VERSION=1.0.0-rc.1 OUT=dist/rc.1` | Build six archives and `SHA256SUMS` from a clean checkout |
+| `make build VERSION=1.0.0-rc.2` | Inject a candidate version into `bin/portcheck` |
+| `make release VERSION=1.0.0-rc.2 OUT=dist/rc.2` | Build six archives and `SHA256SUMS` from a clean checkout |
 
 Before finishing a change:
 
