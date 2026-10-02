@@ -1,6 +1,19 @@
 // Package portcheck checks local TCP binding availability, defaulting to 127.0.0.1,
 // and separately tests user-selected TCP connectivity with Connect.
 // A free result is an observation, not a reservation of the port.
+//
+// Check and CheckPorts use IPv4 loopback; CheckHost and CheckPortsHost select a
+// local bind address. An occupied port is a normal bind result, not an error.
+// Connect is a separate, finite TCP dial with no payload. Refusal and timeout
+// are negative connectivity results and return errors retaining their causes.
+//
+// All operations require a non-nil context. Batch checks validate all input
+// before binding, preserve first-occurrence order, continue after system errors,
+// and return partial results on cancellation. Inspect both the results and the
+// joined error with errors.Is/errors.As. Cancellation is cooperative between
+// synchronous OS calls. Process inspection, find, watch, wait, and doctor are
+// CLI features, not public library APIs. The library uses portable Go networking
+// APIs; address-family conflicts and low-port permissions depend on the OS.
 package portcheck
 
 import (

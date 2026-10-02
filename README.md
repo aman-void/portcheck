@@ -6,8 +6,13 @@ Check ports and ranges, find an available port, watch state changes, or wait
 for a desired state. Optionally identify visible Linux listening processes.
 Test TCP connectivity with `--connect`, or combine factual local observations
 with `doctor`. Consume results through JSON and a small Go API.
-**v0.5.0** uses only Go's standard library, defaults to IPv4 loopback
+The **v1.0 release candidate** uses only Go's standard library, defaults to IPv4 loopback
 (`127.0.0.1`), and supports explicit local IPv4/IPv6 addresses and hostnames.
+
+Development builds report `1.0.0-dev`; release builds inject their version.
+Final `v1.0.0` publication is pending candidate validation and owner review.
+See the [compatibility/API/JSON contract](docs/contracts.md),
+[platform matrix](docs/platforms.md), and [release checklist](docs/releasing.md).
 
 ```text
 PORT    STATUS
@@ -29,7 +34,7 @@ make build
 ./bin/portcheck --version
 ```
 
-The version command prints `portcheck version 0.5.0`. Port statuses depend
+The version command prints `portcheck version 1.0.0-dev`. Port statuses depend
 on what is running on your machine; the example output is illustrative.
 
 **Without Make:**
@@ -56,6 +61,41 @@ The command is installed into `GOBIN`, or `$(go env GOPATH)/bin` when unset.
 Add that directory to your `PATH` if `portcheck` is not found.
 Remote installation depends on the repository being published at
 `github.com/aman-void/portcheck`; these checkout-based commands do not.
+
+### Install a published version
+
+Once a release tag is published:
+
+```sh
+go install github.com/aman-void/portcheck/cmd/portcheck@v1.0.0
+# Or select the latest published version:
+go install github.com/aman-void/portcheck/cmd/portcheck@latest
+```
+
+Versioned Go installations read their version from Go build information. Local
+checkouts retain `1.0.0-dev`; linker-injected versions take precedence.
+
+### Install a release binary
+
+Download the archive for your platform and `SHA256SUMS` from
+[GitHub Releases](https://github.com/aman-void/portcheck/releases). When available,
+an example Linux amd64 installation is:
+
+```sh
+# Run in the directory containing the downloaded files.
+sha256sum --ignore-missing -c SHA256SUMS
+tar -xzf portcheck_1.0.0_linux_amd64.tar.gz
+mkdir -p "$HOME/.local/bin"
+install -m 755 portcheck_1.0.0_linux_amd64/portcheck "$HOME/.local/bin/portcheck"
+portcheck --version
+```
+
+Add `$HOME/.local/bin` to `PATH`. On macOS, compare `shasum -a 256 <archive>`
+with its entry in `SHA256SUMS`. On Windows, use `Get-FileHash <archive> -Algorithm SHA256`,
+then `Expand-Archive` and place `portcheck.exe` in a directory on `PATH`.
+Use the actual candidate version in filenames when installing an RC. Archives
+include the binary, MIT license, and build provenance. See the platform matrix
+before treating an architecture as runtime-validated.
 
 ## Usage examples
 
@@ -344,7 +384,7 @@ find's numeric/JSON output. `--watch --json` remains invalid.
   It does not run `ss`, `lsof`, or any other command. Process names and paths are
   sanitized for terminal output; JSON preserves the original escaped strings.
 - **macOS, Windows, other platforms:** process inspection is explicitly
-  unsupported in v0.5. An occupied `--process` result reports that limitation,
+  unsupported. An occupied `--process` result reports that limitation,
   while normal checks and free-port checks still work. Cross-compilation does
   not establish native runtime support.
 - Permissions, `hidepid`, containers, and PID/network namespaces can hide owners.
@@ -597,7 +637,7 @@ alone is not a claim of functional support on an untested OS.
 
 The public package lives at the module root:
 `github.com/aman-void/portcheck`. Once the version is published, add it to
-your Go project with `go get github.com/aman-void/portcheck@v0.5.0`.
+your Go project with `go get github.com/aman-void/portcheck@v1.0.0`.
 For unpublished local changes, use a local `replace` directive pointing to
 this checkout instead of expecting the remote version to exist.
 
@@ -710,6 +750,8 @@ Run `make` or `make help` for the command menu.
 | `make build` | Build `bin/portcheck` |
 | `make run ARGS="--help"` | Run the CLI from source |
 | `make clean` | Remove only known binary outputs |
+| `make build VERSION=1.0.0-rc.1` | Inject a candidate version into `bin/portcheck` |
+| `make release VERSION=1.0.0-rc.1 OUT=dist/rc.1` | Build six archives and `SHA256SUMS` from a clean checkout |
 
 Before finishing a change:
 
@@ -735,6 +777,7 @@ Direct verification:
 ```sh
 gofmt -l .
 go test ./...
+go test -race ./...
 go vet ./...
 go build ./cmd/portcheck
 go build ./...
@@ -759,10 +802,11 @@ go test ./internal/cli -run '^Test(Connect|Doctor)' -count=1
 Tests allocate local TCP listeners dynamically; they need loopback socket
 access but no internet services or root privileges.
 
-Range-expansion benchmarks (including the full legal range):
+Pure parsing and orchestration/formatting benchmarks (including the full legal range):
 
 ```sh
 go test ./internal/cli -run '^$' -bench '^BenchmarkRangeExpansion$' -benchmem
+go test ./internal/cli -run '^$' -bench '^BenchmarkCLIContracts$' -benchmem
 ```
 
 ### Architecture
