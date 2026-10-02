@@ -36,7 +36,7 @@ help:
 
 fmt:
 	$(call announce,Formatting Go source)
-	@gofmt -w .
+	@gofmt -w $$(find . -name '*.go' -not -path './.*' -not -path './dist/*' -not -path './bin/*')
 	$(call success,Formatting complete)
 
 test:
